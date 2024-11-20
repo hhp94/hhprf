@@ -1,0 +1,124 @@
+---
+title: "workspace"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{workspace}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(hhprf)
+```
+
+
+```{r setup}
+load_all()
+```
+
+* Tune knn imputation with hyper parameters
+* Possibly use the same thing for missMDA imput PCA
+* Tune by specific chromosome and group
+
+for each combination of hyper parameter
+  for each group
+    for each chromosome
+      for each replication
+        inject NA (inject_na)
+        impute (results)
+        calculate and return prediction error 
+      average result across replication
+      return chromosome and group wise best combination of hyper parameter
+
+```{r}
+sim_mat <- function(
+    n = 100, m = 100, nchr = 2, perc_NA = 0.5, perc_col_NA = 0.5, transpose = TRUE
+  ) {
+  stopifnot(
+    n > 1, m > 1, nchr >= 1, nchr <= 22, nchr < n,
+    perc_NA > 0, perc_NA < 1, perc_col_NA > 0, perc_col_NA <= 1
+  )
+  
+  # create and scale the matrix to between 0 and 1
+  d_length <- n * m
+  d <- matrix(rnorm(d_length), nrow = n, ncol = m)
+  d <- apply(d, MARGIN = 2, function(x) (x - min(x)) / (max(x) - min(x)))
+  
+  # generate realistic cpg and sample names
+  cpg <- seq_len(n)
+  chr <- sample(paste0("chr", seq_len(nchr)), size = n, replace = TRUE)
+  user <- data.frame(cpg = paste0("cg", cpg), chr = chr)
+  colnames(d) <- paste0("s", seq_len(m))
+  row.names(d) <- user$cpg
+  d <- t(d)
+  
+  # remember, d is t()ed, so n and m are swapped
+  col_miss_size <- max(floor(perc_col_NA * n), 1)
+  NA_size <- max(floor(perc_NA * m), 1)
+  
+  if (col_miss_size > 0 && NA_size > 0) {
+    col_miss <- sample.int(n, size = col_miss_size)
+    for (i in col_miss) {
+      NA_position <- sample.int(m, size = NA_size)
+      d[NA_position, i] <- NA
+    }
+  }
+  
+  if(transpose) {
+    d <- t(d)
+  }
+  return(list(input = d, user = user))
+}
+```
+
+```{r}
+inject_na <- function(X, prop) {
+  stopifnot(is.matrix(X))
+  na_mat <- !is.na(X)
+  not_na <- which(na_mat)
+  na_size <- floor(length(not_na) * prop)
+  if (na_size == 0) {
+    stop("Increase the proportion of missing values (prop).")
+  }
+  # init while loop
+  c_miss <- TRUE
+  r_miss <- TRUE
+  na_loc <- NULL
+  # inject NA and ensure no row or column is entirely missing
+  while (c_miss || r_miss) {
+    na_mat_test <- na_mat
+    na_loc <- sample(not_na, size = na_size)
+    na_mat_test[na_loc] <- FALSE
+    c_miss <- any(colSums(na_mat_test) == 0) # cols with all miss will have sum zero
+    r_miss <- any(rowSums(na_mat_test) == 0) # rows with all miss will have sum zero
+  }
+  # get truth
+  truth <- X[na_loc]
+  # inject actual NA
+  X[na_loc] <- NA
+  
+  return(list(X = X, truth = truth, na_loc = na_loc))
+}
+
+impute.knn1 <- function(X, k, maxp_prop, seed, truth, na_loc) {
+  maxp <- floor(nrow(X) * maxp_prop)
+  d <- impute::impute.knn(data = X, k = k, maxp = maxp, rng.seed = seed)
+  estimate <- d$data[na_loc]
+  return(data.frame(truth = truth, estimate = estimate))
+}
+
+s <- sim_mat(100, 10)
+a <- inject_na(s$input, 0.1)
+a
+
+b <- impute.knn1(X = a$X, k = 1, maxp_prop = 1, seed = 1, truth = a$truth, na_loc = a$na_loc)
+b
+```
+
