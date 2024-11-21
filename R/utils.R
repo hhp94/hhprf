@@ -7,7 +7,7 @@ sim_mat <- function(
 
   # create and scale the matrix to between 0 and 1
   d_length <- n * m
-  d <- matrix(rnorm(d_length), nrow = n, ncol = m)
+  d <- matrix(stats::rnorm(d_length), nrow = n, ncol = m)
   d <- apply(d, MARGIN = 2, function(x) (x - min(x)) / (max(x) - min(x)))
 
   # generate realistic feature and sample names
