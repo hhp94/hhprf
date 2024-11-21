@@ -16,9 +16,14 @@ Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 Imports: 
+    dplyr,
     fs,
+    furrr,
+    future,
     impute,
+    purrr,
     qs2,
+    tidyr,
     tools,
     utils
 VignetteBuilder: knitr
