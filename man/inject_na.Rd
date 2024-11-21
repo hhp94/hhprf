@@ -11,7 +11,9 @@ inject_na(
   prop,
   c_thresh = 0.9,
   r_thresh = 0.9,
-  max_iter = 1000
+  max_iter = 1000,
+  transpose,
+  debug = FALSE
 )
 }
 \arguments{
@@ -28,6 +30,10 @@ inject_na(
 \item{r_thresh}{A numeric value between 0 and 1. Maximum allowed proportion of missing values per row. Default is \code{0.9}.}
 
 \item{max_iter}{A positive integer. Maximum number of iterations for injecting missing values. Default is 1000.}
+
+\item{transpose}{Transpose before NA injection or not. Default to FALSE}
+
+\item{debug}{return extra object for debugging.}
 }
 \value{
 A vector of indices indicating the locations of injected \code{NA} in the subset matrix.
@@ -42,5 +48,5 @@ colnames(X) <- 1:10
 rownames(X) <- 1:100
 feature_id <- rownames(X)[1:5]
 sample_id <- colnames(X)[1:5]
-inject_na(X, feature_id, sample_id, prop = 0.1, c_thresh = 1, r_thresh = 1)
+inject_na(X, feature_id, sample_id, prop = 0.1, c_thresh = 1, r_thresh = 1, transpose = FALSE)
 }

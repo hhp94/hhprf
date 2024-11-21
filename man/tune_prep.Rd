@@ -13,7 +13,8 @@ tune_prep(
   prop = 0.05,
   c_thresh = 0.9,
   r_thresh = 0.9,
-  max_iter = 1000
+  max_iter = 1000,
+  transpose = FALSE
 )
 }
 \arguments{
@@ -34,6 +35,8 @@ tune_prep(
 \item{r_thresh}{A numeric value between 0 and 1. Maximum allowed proportion of missing values per row. Default is \code{0.9}.}
 
 \item{max_iter}{A positive integer. Maximum number of iterations for injecting missing values. Default is 1000.}
+
+\item{transpose}{Transpose before NA injection or not. Default to FALSE}
 }
 \value{
 A data frame

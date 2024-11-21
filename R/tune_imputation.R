@@ -16,6 +16,7 @@
 #' @param c_thresh A numeric value between 0 and 1. Maximum allowed proportion of missing values per column. Default is `0.9`.
 #' @param r_thresh A numeric value between 0 and 1. Maximum allowed proportion of missing values per row. Default is `0.9`.
 #' @param max_iter A positive integer. Maximum number of iterations for injecting missing values. Default is 1000.
+#' @param transpose Transpose before NA injection or not. Default to FALSE
 #'
 #' @return A data frame
 #'
@@ -36,7 +37,8 @@ tune_prep <- function(
     prop = 0.05,
     c_thresh = 0.9,
     r_thresh = 0.9,
-    max_iter = 1000) {
+    max_iter = 1000,
+    transpose = FALSE) {
   # input validation
   stopifnot("X has to be a matrix" = is.matrix(X))
 
@@ -137,121 +139,13 @@ tune_prep <- function(
         prop = prop,
         c_thresh = c_thresh,
         r_thresh = r_thresh,
-        max_iter = max_iter
+        max_iter = max_iter,
+        transpose = transpose
       )
     }
   )
-
+  df <- tidyr::unnest(df, cols = dplyr::all_of("na_loc"))
   return(df)
-}
-
-#' Tune [impute::impute.knn()]
-#'
-#' Tunes the parameters of the [impute::impute.knn()] method for imputing missing values.
-#' This function evaluates the performance of different parameter combinations through repeated
-#' NA injection and imputation, across various feature and sample groupings.
-#'
-#' @inheritParams tune_prep
-#' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
-#' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
-#'
-#' @return A data frame containing the tuning parameters and a column called `tune`
-#' that contains the tuning results for each parameter combination.`tune` can be used
-#' for performance measurement (i.e. with [yardstick::rmse()]).
-#'
-#' @examples
-#' X <- matrix(rnorm(100), nrow = 10, ncol = 10)
-#' row.names(X) <- 1:10
-#' colnames(X) <- 1:10
-#' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
-#' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
-#' hp <- data.frame(k = c(3, 5), maxp_prop = c(0.1, 0.2))
-#' tune_knn(
-#'   X,
-#'   group_sample,
-#'   group_feature,
-#'   hp,
-#'   rep = 2,
-#'   parallel = FALSE,
-#'   progress = TRUE,
-#'   c_thresh = 1, r_thresh = 1
-#' )
-#' @export
-tune_knn <- function(
-    X,
-    group_sample,
-    group_feature,
-    hp,
-    rep = 1,
-    prop = 0.05,
-    c_thresh = 0.9,
-    r_thresh = 0.9,
-    max_iter = 1000,
-    parallel = FALSE,
-    progress = FALSE) {
-  if (parallel) {
-    lapply_fn <- furrr::future_pmap
-  } else {
-    lapply_fn <- purrr::pmap
-  }
-
-  stopifnot(
-    "`hp` has to be a data.frame with 2 columns `k` and `maxp_prop`" = is.data.frame(hp) && all(c("k", "maxp_prop") %in% names(hp)),
-    "`k` has to be positive integers" = all(as.integer(hp[["k"]]) == hp[["k"]]) &&
-      min(hp[["k"]]) > 0,
-    "`maxp_prop` has to be real numbers between 0 and 1 (inclusive)" = is.numeric(hp[["maxp_prop"]]) &&
-      min(hp[["maxp_prop"]]) >= 0 && max(hp[["maxp_prop"]]) <= 1,
-    "`hp` cannot have duplicated rows" = nrow(hp) == nrow(dplyr::distinct(hp))
-  )
-
-  # prep parameters
-  params <- tune_prep(
-    X = X,
-    group_sample = group_sample,
-    group_feature = group_feature,
-    rep = rep,
-    hp = hp,
-    prop = prop,
-    c_thresh = c_thresh,
-    r_thresh = r_thresh,
-    max_iter = max_iter
-  )
-
-  # impute
-  params$tune <- lapply_fn(
-    .l = list(
-      X = list(X),
-      sample_id = params$sample_id,
-      feature_id = params$feature_id,
-      k = params$k,
-      maxp_prop = params$maxp_prop,
-      seed = params$seed,
-      na_loc = params$na_loc
-    ),
-    .f = function(X,
-                  feature_id,
-                  sample_id,
-                  k,
-                  maxp_prop,
-                  seed,
-                  na_loc,
-                  ...) {
-      impute.knn1(
-        X = X,
-        feature_id = feature_id,
-        sample_id = sample_id,
-        k = k,
-        maxp_prop = maxp_prop,
-        seed = seed,
-        na_loc = na_loc
-      )
-    },
-    .progress = progress,
-    .options = furrr::furrr_options(seed = TRUE)
-  )
-
-  params$method <- "knn"
-  return(params)
 }
 
 #' Inject Missing Values
@@ -262,6 +156,7 @@ tune_knn <- function(
 #' @inheritParams tune_prep
 #' @param feature_id A vector of feature IDs to subset rows of `X`.
 #' @param sample_id A vector of sample IDs to subset columns of `X`.
+#' @param debug return extra object for debugging.
 #'
 #' @return A vector of indices indicating the locations of injected `NA` in the subset matrix.
 #'
@@ -271,7 +166,7 @@ tune_knn <- function(
 #' rownames(X) <- 1:100
 #' feature_id <- rownames(X)[1:5]
 #' sample_id <- colnames(X)[1:5]
-#' inject_na(X, feature_id, sample_id, prop = 0.1, c_thresh = 1, r_thresh = 1)
+#' inject_na(X, feature_id, sample_id, prop = 0.1, c_thresh = 1, r_thresh = 1, transpose = FALSE)
 #' @export
 inject_na <- function(
     X,
@@ -280,8 +175,11 @@ inject_na <- function(
     prop,
     c_thresh = 0.9,
     r_thresh = 0.9,
-    max_iter = 1000) {
+    max_iter = 1000,
+    transpose,
+    debug = FALSE) {
   stopifnot(is.matrix(X))
+  stopifnot(is.logical(transpose), length(transpose) == 1)
   for (i in list(c_thresh, r_thresh)) {
     if (!is.numeric(i)) stop("Thresholds must be numeric values")
     if (length(i) != 1) stop("Thresholds must be single values, not vectors")
@@ -294,7 +192,11 @@ inject_na <- function(
       is.numeric(prop) && length(prop) == 1 && 0 < prop && prop <= 1
   )
   # subset the matrix to the specified features and samples
-  M <- X[feature_id, sample_id]
+  M <- if (transpose) {
+    t(X[feature_id, sample_id])
+  } else {
+    X[feature_id, sample_id]
+  }
   na_mat <- !is.na(M)
   not_na <- which(na_mat)
   na_size <- ceiling(length(not_na) * prop)
@@ -325,7 +227,136 @@ inject_na <- function(
     c_miss <- any(col_miss_count > max_col_miss)
     r_miss <- any(row_miss_count > max_row_miss)
   }
-  return(na_loc)
+  if (debug) {
+    return(list(na_loc = na_loc, M = M))
+  }
+  return(
+    dplyr::tibble(
+      na_loc = list(na_loc),
+      r_names = list(row.names(M)),
+      c_names = list(colnames(M))
+    )
+  )
+}
+
+# impute::impute.knn ----
+#' Tune [impute::impute.knn()]
+#'
+#' Tunes the parameters of the [impute::impute.knn()] method for imputing missing values.
+#' This function evaluates the performance of different parameter combinations through repeated
+#' NA injection and imputation, across various feature and sample groupings.
+#'
+#' @inheritParams tune_prep
+#' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
+#' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
+#' @param ... Arguments passed to [impute::impute.knn()]
+#' @return A data frame containing the tuning parameters and a column called `tune`
+#' that contains the tuning results for each parameter combination.`tune` can be used
+#' for performance measurement (i.e. with [yardstick::rmse()]).
+#'
+#' @examples
+#' X <- matrix(rnorm(1000), nrow = 100, ncol = 10)
+#' row.names(X) <- 1:100
+#' colnames(X) <- 1:10
+#' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, length.out = 10))
+#' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, length.out = 100))
+#' hp <- data.frame(k = c(3, 5), maxp_prop = c(0.1, 0.2))
+#' tune_knn(
+#'   X,
+#'   group_sample,
+#'   group_feature,
+#'   hp,
+#'   rep = 2,
+#'   parallel = FALSE,
+#'   progress = TRUE,
+#'   c_thresh = 1,
+#'   r_thresh = 1
+#' )
+#' @export
+tune_knn <- function(
+    X,
+    group_sample,
+    group_feature,
+    hp,
+    rep = 1,
+    prop = 0.05,
+    c_thresh = 0.9,
+    r_thresh = 0.9,
+    max_iter = 1000,
+    parallel = FALSE,
+    progress = FALSE,
+    ...) {
+  if (parallel) {
+    lapply_fn <- furrr::future_pmap
+  } else {
+    lapply_fn <- purrr::pmap
+  }
+
+  stopifnot(
+    "`hp` has to be a data.frame with 2 columns `k` and `maxp_prop`" = is.data.frame(hp) && all(c("k", "maxp_prop") %in% names(hp)),
+    "`k` has to be positive integers" = all(as.integer(hp[["k"]]) == hp[["k"]]) &&
+      min(hp[["k"]]) > 0,
+    "`maxp_prop` has to be real numbers between 0 and 1 (inclusive)" = is.numeric(hp[["maxp_prop"]]) &&
+      min(hp[["maxp_prop"]]) >= 0 && max(hp[["maxp_prop"]]) <= 1,
+    "`hp` cannot have duplicated rows" = nrow(hp) == nrow(dplyr::distinct(hp))
+  )
+
+  extra_args <- list(...)
+  # prep parameters
+  params <- tune_prep(
+    X = X,
+    group_sample = group_sample,
+    group_feature = group_feature,
+    rep = rep,
+    hp = hp,
+    prop = prop,
+    c_thresh = c_thresh,
+    r_thresh = r_thresh,
+    max_iter = max_iter,
+    transpose = FALSE
+  )
+
+  # impute
+  params$tune <- lapply_fn(
+    .l = list(
+      X = list(X),
+      sample_id = params$sample_id,
+      feature_id = params$feature_id,
+      k = params$k,
+      maxp_prop = params$maxp_prop,
+      seed = params$seed,
+      na_loc = params$na_loc
+    ),
+    .f = function(X,
+                  feature_id,
+                  sample_id,
+                  k,
+                  maxp_prop,
+                  seed,
+                  na_loc,
+                  ...) {
+      do.call(
+        impute.knn1,
+        c(
+          list(
+            X = X,
+            feature_id = feature_id,
+            sample_id = sample_id,
+            k = k,
+            maxp_prop = maxp_prop,
+            seed = seed,
+            na_loc = na_loc
+          ),
+          extra_args
+        )
+      )
+    },
+    .progress = progress,
+    .options = furrr::furrr_options(seed = TRUE)
+  )
+
+  params$method <- "knn"
+  return(params)
 }
 
 #' Wrapper for [impute::impute.knn()]
@@ -333,8 +364,9 @@ inject_na <- function(
 #' @inheritParams inject_na
 #' @param k Integer specifying the number of nearest neighbors to use.
 #' @param maxp_prop A numeric value specifying the proportion of features used per block.
-#' @param na_loc A vector of location for amputation. Generated by [inject_na()]
+#' @param na_loc A vector of location for amputation. Generated by [inject_na()].
 #' @param seed An integer seed for random number generation.
+#' @param ... arguments passed to [impute::impute.knn()]
 impute.knn1 <- function(
     X,
     feature_id,
@@ -342,15 +374,159 @@ impute.knn1 <- function(
     k,
     maxp_prop,
     seed,
-    na_loc) {
+    na_loc,
+    ...) {
+  set.seed(seed)
   stopifnot(is.matrix(X))
   M <- X[feature_id, sample_id]
   truth <- M[na_loc]
   M[na_loc] <- NA
   maxp <- ceiling(nrow(M) * maxp_prop)
-  obj <- impute::impute.knn(data = M, k = k, maxp = maxp, rng.seed = seed)
+  obj <- impute::impute.knn(data = M, k = k, maxp = maxp, rng.seed = seed, ...)
   estimate <- obj$data[na_loc]
   return(dplyr::tibble(truth = truth, estimate = estimate))
 }
 
+# missMDA::methyl_imputePCA ----
+#' Tune [missMDA::methyl_imputePCA()]
+#'
+#' Tunes the parameters of the [missMDA::methyl_imputePCA()] method for imputing missing values.
+#' This function evaluates the performance of different parameter combinations through repeated
+#' NA injection and imputation, across various feature and sample groupings.
+#'
+#' @inheritParams tune_prep
+#' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
+#' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
+#' @param ... Arguments passed to [missMDA::methyl_imputePCA()]
+#' @return A data frame containing the tuning parameters and a column called `tune`
+#' that contains the tuning results for each parameter combination.`tune` can be used
+#' for performance measurement (i.e. with [yardstick::rmse()]).
+#'
+#' @examples
+#' X <- matrix(rnorm(100), nrow = 10, ncol = 10)
+#' row.names(X) <- 1:10
+#' colnames(X) <- 1:10
+#' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
+#' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
+#' hp <- data.frame(ncp = 1)
+#' tune_imputePCA(
+#'   X,
+#'   group_sample,
+#'   group_feature,
+#'   hp,
+#'   rep = 2,
+#'   parallel = FALSE,
+#'   progress = TRUE,
+#'   c_thresh = 1,
+#'   r_thresh = 1
+#' )
+#' @export
+tune_imputePCA <- function(
+    X,
+    group_sample,
+    group_feature,
+    hp,
+    rep = 1,
+    prop = 0.05,
+    c_thresh = 0.9,
+    r_thresh = 0.9,
+    max_iter = 1000,
+    parallel = FALSE,
+    progress = FALSE,
+    ...) {
+  if (parallel) {
+    lapply_fn <- furrr::future_pmap
+  } else {
+    lapply_fn <- purrr::pmap
+  }
+
+  stopifnot(
+    "`hp` has to be a data.frame with 1 column `ncp`" = is.data.frame(hp) && all(c("ncp") %in% names(hp)),
+    "`ncp` has to be positive integers" = all(as.integer(hp[["ncp"]]) == hp[["ncp"]]) &&
+      min(hp[["ncp"]]) > 0,
+    "`hp` cannot have duplicated rows" = nrow(hp) == nrow(dplyr::distinct(hp))
+  )
+
+  extra_args <- list(...)
+  # prep parameters
+  params <- tune_prep(
+    X = X,
+    group_sample = group_sample,
+    group_feature = group_feature,
+    rep = rep,
+    hp = hp,
+    prop = prop,
+    c_thresh = c_thresh,
+    r_thresh = r_thresh,
+    max_iter = max_iter,
+    transpose = TRUE
+  )
+
+  # impute
+  params$tune <- lapply_fn(
+    .l = list(
+      X = list(X),
+      sample_id = params$sample_id,
+      feature_id = params$feature_id,
+      ncp = params$ncp,
+      seed = params$seed,
+      na_loc = params$na_loc
+    ),
+    .f = function(X,
+                  feature_id,
+                  sample_id,
+                  ncp,
+                  seed,
+                  na_loc,
+                  ...) {
+      do.call(
+        "imputePCA1",
+        c(
+          list(
+            X = X,
+            feature_id = feature_id,
+            sample_id = sample_id,
+            ncp = ncp,
+            seed = seed,
+            na_loc = na_loc
+          ),
+          extra_args
+        )
+      )
+    },
+    .progress = progress,
+    .options = furrr::furrr_options(seed = TRUE)
+  )
+
+  params$method <- "imputePCA"
+  return(params)
+}
+
+#' Wrapper for [missMDA::methyl_imputePCA()]
+#'
+#' @inheritParams inject_na
+#' @param ncp number of PCs.
+#' @param na_loc A vector of location for amputation. Generated by [inject_na()]
+#' @param seed An integer seed for random number generation.
+#' @param ... arguments passed to [missMDA::methyl_imputePCA()]
+imputePCA1 <- function(
+    X,
+    feature_id,
+    sample_id,
+    ncp,
+    seed,
+    na_loc,
+    ...) {
+  set.seed(seed)
+  stopifnot(is.matrix(X))
+  # imputePCA have samples in the rows so you have to T
+  M <- t(X[feature_id, sample_id])
+  truth <- M[na_loc]
+  M[na_loc] <- NA
+  obj <- missMDA::methyl_imputePCA(M, ncp = ncp, ...)
+  estimate <- obj$completeObs[na_loc]
+  return(dplyr::tibble(truth = truth, estimate = estimate))
+}
+
+# other ----
 utils::globalVariables(c("sample_id", "feature_id"))
