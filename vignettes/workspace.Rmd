@@ -34,7 +34,7 @@ for each combination of hyper parameter
 
 ```{r}
 # s <- sim_mat(100, 10)
-# 
+#
 # set.seed(1234)
 # inject_na(
 #   s$input,
@@ -43,7 +43,7 @@ for each combination of hyper parameter
 #   c_thresh = 1,
 #   r_thresh = 1
 # )
-# 
+#
 # a <- tune_knn(
 #   X = s$input,
 #   hp = data.frame(k = c(1, 2), maxp_prop = c(0.5, 0.7)),
@@ -52,7 +52,7 @@ for each combination of hyper parameter
 #   rep = 2,
 #   prop = c(0.1)
 # )
-# 
+#
 # b <- tune_imputePCA(
 #   X = s$input,
 #   hp = data.frame(ncp = 1),
@@ -61,7 +61,7 @@ for each combination of hyper parameter
 #   rep = 2,
 #   prop = c(0.1)
 # )
-# 
+#
 # a$r_names
 # b$r_names
 ```

@@ -41,7 +41,6 @@ tune_prep <- function(
     transpose = FALSE) {
   # input validation
   stopifnot("X has to be a matrix" = is.matrix(X))
-
   if (ncol(X) > nrow(X)) {
     warning("X is expected to be long")
   }
@@ -54,55 +53,46 @@ tune_prep <- function(
       "`hp` needs at least 1 row" = nrow(hp) > 0
     )
   }
-
   if (is.null(group_sample)) {
     group_sample <- data.frame(sample_id = colnames(X), group = "all_samples")
   }
-
   if (is.null(group_feature)) {
     group_feature <- data.frame(feature_id = rownames(X), group = "all_features")
   }
-
   stopifnot(
     "`group_sample` has to be a data frame with 2 columns: `sample_id` and `group`" = is.data.frame(group_sample),
     "`group_sample` needs at least 1 row" = nrow(group_sample) > 0,
     "`group_sample` must contain unique `sample_id`" = !anyDuplicated(group_sample$sample_id)
   )
-
   stopifnot(
     "`group_feature` has to be a data frame with 2 columns: `feature_id` and `group`" = is.data.frame(group_feature),
     "`group_feature` needs at least 1 row" = nrow(group_feature) > 0,
     "`group_feature` must contain unique `feature_id`" = !anyDuplicated(group_feature$feature_id)
   )
-
   stopifnot(
     "`X` has to have row names (feature_id)" = !is.null(row.names(X)),
     "`X` has to have col names (sample_id)" = !is.null(colnames(X)),
     "`X`'s row names must match `group_feature$feature_id`" = all(row.names(X) %in% group_feature$feature_id),
     "`X`'s column names must match `group_sample$sample_id`" = all(colnames(X) %in% group_sample$sample_id)
   )
-
   sample_group_counts <- table(group_sample$group)
   if (any(sample_group_counts == 1)) {
     stop("Each group sample must have more than 1 sample.")
   }
-
   feature_group_counts <- table(group_feature$group)
   if (any(feature_group_counts == 1)) {
     stop("Each group feature must have more than 1 feature.")
   }
-
   df <- tidyr::expand_grid(
     sample_group = unique(group_sample$group),
     feature_group = unique(group_feature$group),
     rep = seq_len(rep)
   )
-
   if (!is.null(hp)) {
     df$params <- list(hp)
     df <- tidyr::unnest(df, cols = dplyr::all_of("params"))
   }
-
+  # end validation
   group_sample_collapsed <- tidyr::nest(
     group_sample,
     sample_id = dplyr::all_of("sample_id"),
@@ -113,7 +103,6 @@ tune_prep <- function(
     feature_id = dplyr::all_of("feature_id"),
     .by = "group"
   )
-
   df <- dplyr::inner_join(df, group_sample_collapsed, by = c("sample_group" = "group"))
   df <- dplyr::inner_join(df, group_feature_collapsed, by = c("feature_group" = "group"))
   df <- dplyr::mutate(
@@ -126,7 +115,6 @@ tune_prep <- function(
     }),
     seed = sample.int(10000, size = dplyr::n())
   )
-
   # ampute
   df$na_loc <- purrr::map2(
     df$feature_id,
@@ -291,7 +279,6 @@ tune_knn <- function(
   } else {
     lapply_fn <- purrr::pmap
   }
-
   stopifnot(
     "`hp` has to be a data.frame with 2 columns `k` and `maxp_prop`" = is.data.frame(hp) && all(c("k", "maxp_prop") %in% names(hp)),
     "`k` has to be positive integers" = all(as.integer(hp[["k"]]) == hp[["k"]]) &&
@@ -300,7 +287,6 @@ tune_knn <- function(
       min(hp[["maxp_prop"]]) >= 0 && max(hp[["maxp_prop"]]) <= 1,
     "`hp` cannot have duplicated rows" = nrow(hp) == nrow(dplyr::distinct(hp))
   )
-
   extra_args <- list(...)
   # prep parameters
   params <- tune_prep(
@@ -315,7 +301,6 @@ tune_knn <- function(
     max_iter = max_iter,
     transpose = FALSE
   )
-
   # impute
   params$tune <- lapply_fn(
     .l = list(
@@ -382,7 +367,16 @@ impute.knn1 <- function(
   truth <- M[na_loc]
   M[na_loc] <- NA
   maxp <- ceiling(nrow(M) * maxp_prop)
-  obj <- impute::impute.knn(data = M, k = k, maxp = maxp, rng.seed = seed, ...)
+  # tryCatch object. Failure to fit will result in NA
+  obj <- tryCatch(
+    impute::impute.knn(data = M, k = k, maxp = maxp, rng.seed = seed, ...),
+    error = function(e) {
+      NULL
+    }
+  )
+  if (is.null(obj)) {
+    return(dplyr::tibble(truth = NA, estimate = NA))
+  }
   estimate <- obj$data[na_loc]
   return(dplyr::tibble(truth = truth, estimate = estimate))
 }
@@ -439,14 +433,12 @@ tune_imputePCA <- function(
   } else {
     lapply_fn <- purrr::pmap
   }
-
   stopifnot(
     "`hp` has to be a data.frame with 1 column `ncp`" = is.data.frame(hp) && all(c("ncp") %in% names(hp)),
     "`ncp` has to be positive integers" = all(as.integer(hp[["ncp"]]) == hp[["ncp"]]) &&
       min(hp[["ncp"]]) > 0,
     "`hp` cannot have duplicated rows" = nrow(hp) == nrow(dplyr::distinct(hp))
   )
-
   extra_args <- list(...)
   # prep parameters
   params <- tune_prep(
@@ -461,7 +453,6 @@ tune_imputePCA <- function(
     max_iter = max_iter,
     transpose = TRUE
   )
-
   # impute
   params$tune <- lapply_fn(
     .l = list(
@@ -497,7 +488,6 @@ tune_imputePCA <- function(
     .progress = progress,
     .options = furrr::furrr_options(seed = TRUE)
   )
-
   params$method <- "imputePCA"
   return(params)
 }
@@ -523,7 +513,13 @@ imputePCA1 <- function(
   M <- t(X[feature_id, sample_id])
   truth <- M[na_loc]
   M[na_loc] <- NA
-  obj <- missMDA::methyl_imputePCA(M, ncp = ncp, ...)
+  obj <- tryCatch(
+    missMDA::methyl_imputePCA(M, ncp = ncp, ...),
+    error = function(e) NULL
+  )
+  if (is.null(obj)) {
+    return(dplyr::tibble(truth = NA, estimate = NA))
+  }
   estimate <- obj$completeObs[na_loc]
   return(dplyr::tibble(truth = truth, estimate = estimate))
 }
