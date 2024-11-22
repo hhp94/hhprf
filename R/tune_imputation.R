@@ -112,9 +112,10 @@ tune_prep <- function(
     }),
     feature_id = lapply(feature_id, \(x){
       x$feature_id
-    }),
-    seed = sample.int(10000, size = dplyr::n())
+    })
   )
+  df$seed <- sample.int(nrow(df) * 10, size = nrow(df))
+
   # ampute
   df$na_loc <- purrr::map2(
     df$feature_id,
