@@ -8,7 +8,7 @@ tune_knn(
   X,
   group_sample,
   group_feature,
-  hp,
+  hp = NULL,
   rep = 1,
   prop = 0.05,
   c_thresh = 0.9,

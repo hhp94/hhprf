@@ -227,7 +227,143 @@ inject_na <- function(
   )
 }
 
-# impute::impute.knn ----
+# Tune Functions ----
+# model specific validation rules
+validation_rules <- list(
+  knn = function(hp) {
+    stopifnot(
+      "`hp` has to be a data.frame with 2 columns `k` and `maxp_prop`" =
+        is.data.frame(hp) && all(c("k", "maxp_prop") %in% names(hp)),
+      "`k` has to be positive integers" =
+        all(as.integer(hp[["k"]]) == hp[["k"]]) && min(hp[["k"]]) > 0,
+      "`maxp_prop` has to be real numbers between 0 and 1 (inclusive)" =
+        is.numeric(hp[["maxp_prop"]]) && min(hp[["maxp_prop"]]) >= 0 &&
+          max(hp[["maxp_prop"]]) <= 1,
+      "`hp` cannot have duplicated rows" =
+        nrow(hp) == nrow(dplyr::distinct(hp))
+    )
+  },
+  imputePCA = function(hp) {
+    stopifnot(
+      "`hp` has to be a data.frame with 1 column `ncp`" =
+        is.data.frame(hp) && all(c("ncp") %in% names(hp)),
+      "`ncp` has to be positive integers" =
+        all(as.integer(hp[["ncp"]]) == hp[["ncp"]]) && min(hp[["ncp"]]) > 0,
+      "`hp` cannot have duplicated rows" =
+        nrow(hp) == nrow(dplyr::distinct(hp))
+    )
+  },
+  methyLImp2 = function(hp) {}
+)
+
+# helper function for common parameters
+prepare_params <- function(params, X, extra_args = list()) {
+  return(c(
+    list(
+      X = list(X),
+      sample_id = params$sample_id,
+      feature_id = params$feature_id,
+      seed = params$seed,
+      na_loc = params$na_loc
+    ),
+    extra_args
+  ))
+}
+
+# model specific parameters
+argv_list <- list(
+  knn = function(params, X) {
+    prepare_params(params, X, extra_args = list(k = params$k, maxp_prop = params$maxp_prop))
+  },
+  imputePCA = function(params, X) {
+    prepare_params(params, X, extra_args = list(ncp = params$ncp))
+  },
+  methyLImp2 = function(params, X) {
+    prepare_params(params, X)
+  }
+)
+
+# model configuration
+model_config <- list(
+  knn = list(
+    fun_name = "impute_knn",
+    transpose = FALSE
+  ),
+  imputePCA = list(
+    fun_name = "impute_PCA",
+    transpose = TRUE
+  ),
+  methyLImp2 = list(
+    fun_name = "impute_methyLImp2",
+    transpose = TRUE
+  )
+)
+
+# factory function for creating tuning functions
+create_tune_function <- function(method) {
+  function(X,
+           group_sample,
+           group_feature,
+           hp = NULL,
+           rep = 1,
+           prop = 0.05,
+           c_thresh = 0.9,
+           r_thresh = 0.9,
+           max_iter = 1000,
+           parallel = FALSE,
+           progress = FALSE,
+           ...) {
+    # set up parallel processing function
+    lapply_fn <- if (parallel) furrr::future_pmap else purrr::pmap
+
+    # validate hyperparameters data.frame
+    validation_rules[[method]](hp)
+
+    # capture extra args passed to imputation functions
+    extra_args <- list(...)
+
+    # prep parameters
+    params <- tune_prep(
+      X = X,
+      group_sample = group_sample,
+      group_feature = group_feature,
+      rep = rep,
+      hp = hp,
+      prop = prop,
+      c_thresh = c_thresh,
+      r_thresh = r_thresh,
+      max_iter = max_iter,
+      transpose = model_config[[method]]$transpose
+    )
+
+    # prepare model-specific parameters
+    impute_args <- argv_list[[method]](params, X)
+    lapply_args <- list(.progress = progress)
+    if (parallel) {
+      lapply_args <- c(lapply_args, list(.options = furrr::furrr_options(seed = TRUE)))
+    }
+    # impute
+    params$tune <- do.call(
+      "lapply_fn",
+      c(
+        list(
+          .l = impute_args,
+          .f = function(...) {
+            do.call(model_config[[method]]$fun_name, c(list(...), extra_args))
+          }
+        ),
+        lapply_args
+      )
+    )
+
+    params$method <- method
+    exclude <- c("sample_id", "feature_id", "na_loc", "r_names", "c_names")
+    return(params[, setdiff(names(params), exclude)])
+  }
+}
+
+# tune_knn ----
+# Create specific tuning functions
 #' Tune [impute::impute.knn()]
 #'
 #' Tunes the parameters of the [impute::impute.knn()] method for imputing missing values.
@@ -261,137 +397,19 @@ inject_na <- function(
 #'   r_thresh = 1
 #' )
 #' @export
-tune_knn <- function(
-    X,
-    group_sample,
-    group_feature,
-    hp,
-    rep = 1,
-    prop = 0.05,
-    c_thresh = 0.9,
-    r_thresh = 0.9,
-    max_iter = 1000,
-    parallel = FALSE,
-    progress = FALSE,
-    ...) {
-  if (parallel) {
-    lapply_fn <- furrr::future_pmap
-  } else {
-    lapply_fn <- purrr::pmap
-  }
-  stopifnot(
-    "`hp` has to be a data.frame with 2 columns `k` and `maxp_prop`" = is.data.frame(hp) && all(c("k", "maxp_prop") %in% names(hp)),
-    "`k` has to be positive integers" = all(as.integer(hp[["k"]]) == hp[["k"]]) &&
-      min(hp[["k"]]) > 0,
-    "`maxp_prop` has to be real numbers between 0 and 1 (inclusive)" = is.numeric(hp[["maxp_prop"]]) &&
-      min(hp[["maxp_prop"]]) >= 0 && max(hp[["maxp_prop"]]) <= 1,
-    "`hp` cannot have duplicated rows" = nrow(hp) == nrow(dplyr::distinct(hp))
-  )
-  extra_args <- list(...)
-  # prep parameters
-  params <- tune_prep(
-    X = X,
-    group_sample = group_sample,
-    group_feature = group_feature,
-    rep = rep,
-    hp = hp,
-    prop = prop,
-    c_thresh = c_thresh,
-    r_thresh = r_thresh,
-    max_iter = max_iter,
-    transpose = FALSE
-  )
-  # impute
-  params$tune <- lapply_fn(
-    .l = list(
-      X = list(X),
-      sample_id = params$sample_id,
-      feature_id = params$feature_id,
-      k = params$k,
-      maxp_prop = params$maxp_prop,
-      seed = params$seed,
-      na_loc = params$na_loc
-    ),
-    .f = function(X,
-                  feature_id,
-                  sample_id,
-                  k,
-                  maxp_prop,
-                  seed,
-                  na_loc,
-                  ...) {
-      do.call(
-        impute.knn1,
-        c(
-          list(
-            X = X,
-            feature_id = feature_id,
-            sample_id = sample_id,
-            k = k,
-            maxp_prop = maxp_prop,
-            seed = seed,
-            na_loc = na_loc
-          ),
-          extra_args
-        )
-      )
-    },
-    .progress = progress,
-    .options = furrr::furrr_options(seed = TRUE)
-  )
+tune_knn <- create_tune_function("knn")
 
-  params$method <- "knn"
-  return(params)
-}
-
-#' Wrapper for [impute::impute.knn()]
+# tune_imputePCA ----
+#' Tune [missMDA::imputePCA()]
 #'
-#' @inheritParams inject_na
-#' @param k Integer specifying the number of nearest neighbors to use.
-#' @param maxp_prop A numeric value specifying the proportion of features used per block.
-#' @param na_loc A vector of location for amputation. Generated by [inject_na()].
-#' @param seed An integer seed for random number generation.
-#' @param ... arguments passed to [impute::impute.knn()]
-impute.knn1 <- function(
-    X,
-    feature_id,
-    sample_id,
-    k,
-    maxp_prop,
-    seed,
-    na_loc,
-    ...) {
-  set.seed(seed)
-  stopifnot(is.matrix(X))
-  M <- X[feature_id, sample_id]
-  truth <- M[na_loc]
-  M[na_loc] <- NA
-  maxp <- ceiling(nrow(M) * maxp_prop)
-  # tryCatch object. Failure to fit will result in NA
-  obj <- tryCatch(
-    impute::impute.knn(data = M, k = k, maxp = maxp, rng.seed = seed, ...),
-    error = function(e) {
-      NULL
-    }
-  )
-  if (is.null(obj)) {
-    return(dplyr::tibble(truth = NA, estimate = NA))
-  }
-  estimate <- obj$data[na_loc]
-  return(dplyr::tibble(truth = truth, estimate = estimate))
-}
-
-# missMDA::methyl_imputePCA ----
-#' Tune [missMDA::methyl_imputePCA()]
-#'
-#' Tunes the parameters of the [missMDA::methyl_imputePCA()] method for imputing missing values.
+#' Tunes the parameters of the [missMDA::imputePCA()] method for imputing missing values.
 #' This function evaluates the performance of different parameter combinations through repeated
 #' NA injection and imputation, across various feature and sample groupings.
 #'
 #' @inheritParams tune_prep
 #' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
 #' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
-#' @param ... Arguments passed to [missMDA::methyl_imputePCA()]
+#' @param ... Arguments passed to [missMDA::imputePCA()]
 #' @return A data frame containing the tuning parameters and a column called `tune`
 #' that contains the tuning results for each parameter combination.`tune` can be used
 #' for performance measurement (i.e. with [yardstick::rmse()]).
@@ -415,91 +433,90 @@ impute.knn1 <- function(
 #'   r_thresh = 1
 #' )
 #' @export
-tune_imputePCA <- function(
+tune_imputePCA <- create_tune_function("imputePCA")
+
+# tune_impute_methyLImp2 ----
+#' Tune [methyLImp2::methyLImp2()]
+#'
+#' Tunes the parameters of the [methyLImp2::methyLImp2()] method for imputing missing values.
+#' This function evaluates the performance of different parameter combinations through repeated
+#' NA injection and imputation, across various feature and sample groupings.
+#'
+#' @inheritParams tune_prep
+#' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
+#' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
+#' @param ... Arguments passed to [methyLImp2::methyLImp2()]
+#' @return A data frame containing the tuning parameters and a column called `tune`
+#' that contains the tuning results for each parameter combination.`tune` can be used
+#' for performance measurement (i.e. with [yardstick::rmse()]).
+#'
+#' @examples
+#' X <- matrix(rnorm(100), nrow = 10, ncol = 10)
+#' row.names(X) <- 1:10
+#' colnames(X) <- 1:10
+#' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
+#' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
+#' tune_impute_methyLImp2(
+#'   X,
+#'   group_sample,
+#'   group_feature,
+#'   rep = 2,
+#'   parallel = FALSE,
+#'   progress = TRUE,
+#'   c_thresh = 1,
+#'   r_thresh = 1
+#' )
+#' @export
+tune_impute_methyLImp2 <- create_tune_function("methyLImp2")
+
+#' Wrapper for [impute::impute.knn()]
+#'
+#' @inheritParams inject_na
+#' @param k Integer specifying the number of nearest neighbors to use.
+#' @param maxp_prop A numeric value specifying the proportion of features used per block.
+#' @param na_loc A vector of location for amputation. Generated by [inject_na()].
+#' @param seed An integer seed for random number generation.
+#' @param ... arguments passed to [impute::impute.knn()]
+impute_knn <- function(
     X,
-    group_sample,
-    group_feature,
-    hp,
-    rep = 1,
-    prop = 0.05,
-    c_thresh = 0.9,
-    r_thresh = 0.9,
-    max_iter = 1000,
-    parallel = FALSE,
-    progress = FALSE,
+    feature_id,
+    sample_id,
+    k,
+    maxp_prop,
+    seed,
+    na_loc,
     ...) {
-  if (parallel) {
-    lapply_fn <- furrr::future_pmap
-  } else {
-    lapply_fn <- purrr::pmap
-  }
-  stopifnot(
-    "`hp` has to be a data.frame with 1 column `ncp`" = is.data.frame(hp) && all(c("ncp") %in% names(hp)),
-    "`ncp` has to be positive integers" = all(as.integer(hp[["ncp"]]) == hp[["ncp"]]) &&
-      min(hp[["ncp"]]) > 0,
-    "`hp` cannot have duplicated rows" = nrow(hp) == nrow(dplyr::distinct(hp))
-  )
-  extra_args <- list(...)
-  # prep parameters
-  params <- tune_prep(
-    X = X,
-    group_sample = group_sample,
-    group_feature = group_feature,
-    rep = rep,
-    hp = hp,
-    prop = prop,
-    c_thresh = c_thresh,
-    r_thresh = r_thresh,
-    max_iter = max_iter,
-    transpose = TRUE
-  )
-  # impute
-  params$tune <- lapply_fn(
-    .l = list(
-      X = list(X),
-      sample_id = params$sample_id,
-      feature_id = params$feature_id,
-      ncp = params$ncp,
-      seed = params$seed,
-      na_loc = params$na_loc
+  set.seed(seed)
+  stopifnot(is.matrix(X))
+  M <- X[feature_id, sample_id]
+  truth <- M[na_loc]
+  M[na_loc] <- NA
+  maxp <- ceiling(nrow(M) * maxp_prop)
+  # tryCatch object. Failure to fit will result in NA
+  obj <- tryCatch(
+    impute::impute.knn(
+      data = M,
+      k = k,
+      maxp = maxp,
+      rng.seed = seed,
+      ...
     ),
-    .f = function(X,
-                  feature_id,
-                  sample_id,
-                  ncp,
-                  seed,
-                  na_loc,
-                  ...) {
-      do.call(
-        "imputePCA1",
-        c(
-          list(
-            X = X,
-            feature_id = feature_id,
-            sample_id = sample_id,
-            ncp = ncp,
-            seed = seed,
-            na_loc = na_loc
-          ),
-          extra_args
-        )
-      )
-    },
-    .progress = progress,
-    .options = furrr::furrr_options(seed = TRUE)
+    error = error_fn
   )
-  params$method <- "imputePCA"
-  return(params)
+  if (is.null(obj)) {
+    return(dplyr::tibble(truth = NA, estimate = NA))
+  }
+  estimate <- obj$data[na_loc]
+  return(dplyr::tibble(truth = truth, estimate = estimate))
 }
 
 #' Wrapper for [missMDA::methyl_imputePCA()]
 #'
 #' @inheritParams inject_na
-#' @param ncp number of PCs.
-#' @param na_loc A vector of location for amputation. Generated by [inject_na()]
-#' @param seed An integer seed for random number generation.
+#' @inheritParams impute_knn
+#' @param ncp number of PCs
 #' @param ... arguments passed to [missMDA::methyl_imputePCA()]
-imputePCA1 <- function(
+impute_PCA <- function(
     X,
     feature_id,
     sample_id,
@@ -515,7 +532,7 @@ imputePCA1 <- function(
   M[na_loc] <- NA
   obj <- tryCatch(
     missMDA::methyl_imputePCA(M, ncp = ncp, ...),
-    error = function(e) NULL
+    error = error_fn
   )
   if (is.null(obj)) {
     return(dplyr::tibble(truth = NA, estimate = NA))
@@ -524,5 +541,43 @@ imputePCA1 <- function(
   return(dplyr::tibble(truth = truth, estimate = estimate))
 }
 
+#' Wrapper for [methyLImp2::methyLImp2()]
+#'
+#' @inheritParams inject_na
+#' @inheritParams impute_knn
+impute_methyLImp2 <- function(
+    X,
+    feature_id,
+    sample_id,
+    seed,
+    na_loc) {
+  set.seed(seed)
+  stopifnot(is.matrix(X))
+  # `methyLImp2::mod_methyLImp2_internal` have samples in the rows so you have to t()
+  M <- t(X[feature_id, sample_id])
+  truth <- M[na_loc]
+  M[na_loc] <- NA
+  obj <- tryCatch(
+    methyLImp2::mod_methyLImp2_internal(
+      dat = M,
+      min = 0,
+      max = 1,
+      skip_imputation_ids = NULL,
+      minibatch_frac = 1,
+      minibatch_reps = 1,
+    ),
+    error = error_fn
+  )
+  if (is.null(obj)) {
+    return(dplyr::tibble(truth = NA, estimate = NA))
+  }
+  estimate <- obj[na_loc]
+  return(dplyr::tibble(truth = truth, estimate = estimate))
+}
+
 # other ----
 utils::globalVariables(c("sample_id", "feature_id"))
+error_fn <- function(e) {
+  message("Error: ", e$message)
+  return(NULL)
+}

@@ -20,6 +20,7 @@ Imports:
     fs,
     furrr,
     impute,
+    methyLImp2,
     missMDA,
     purrr,
     qs2,

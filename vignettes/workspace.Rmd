@@ -34,16 +34,17 @@ for each combination of hyper parameter
 
 ```{r}
 # s <- sim_mat(100, 10)
-#
+# 
 # set.seed(1234)
 # inject_na(
 #   s$input,
 #   feature_id = s$group_feature$feature_id,
 #   sample_id = s$group_sample$sample_id, prop = 0.05,
 #   c_thresh = 1,
-#   r_thresh = 1
+#   r_thresh = 1,
+#   transpose = FALSE
 # )
-#
+# 
 # a <- tune_knn(
 #   X = s$input,
 #   hp = data.frame(k = c(1, 2), maxp_prop = c(0.5, 0.7)),
@@ -52,7 +53,7 @@ for each combination of hyper parameter
 #   rep = 2,
 #   prop = c(0.1)
 # )
-#
+# 
 # b <- tune_imputePCA(
 #   X = s$input,
 #   hp = data.frame(ncp = 1),
@@ -61,8 +62,15 @@ for each combination of hyper parameter
 #   rep = 2,
 #   prop = c(0.1)
 # )
-#
-# a$r_names
-# b$r_names
+# 
+# d <- tune_impute_methyLImp2(
+#   X = s$input,
+#   group_sample = s$group_sample,
+#   group_feature = s$group_feature,
+#   rep = 2,
+#   prop = c(0.1)
+# )
+# 
+# d$tune
 ```
 
