@@ -97,6 +97,7 @@ tune_prep <- function(
   if (any(feature_group_counts == 1)) {
     stop("Each group feature must have more than 1 feature.")
   }
+  # end validation
   df <- tidyr::expand_grid(
     sample_group = unique(group_sample$group),
     feature_group = unique(group_feature$group),
@@ -106,7 +107,6 @@ tune_prep <- function(
     df$params <- list(hp)
     df <- tidyr::unnest(df, cols = dplyr::all_of("params"))
   }
-  # end validation
   group_sample_collapsed <- tidyr::nest(
     group_sample,
     sample_id = dplyr::all_of("sample_id"),
@@ -202,8 +202,8 @@ inject_na <- function(
       is.numeric(max_iter) && length(max_iter) == 1 && max_iter > 0 && as.integer(max_iter) == max_iter,
     "prop must be a single numeric value between 0 and 1 (inclusive)" =
       is.numeric(prop) && length(prop) == 1 && 0 < prop && prop <= 1,
-    "min_na must be a non-negative integer" =
-      is.numeric(min_na) && length(min_na) == 1 && min_na >= 0 && as.integer(min_na) == min_na,
+    "min_na must be a positive integer" =
+      is.numeric(min_na) && length(min_na) == 1 && min_na > 0 && as.integer(min_na) == min_na,
     "max_na must be a positive integer" =
       is.numeric(max_na) && length(max_na) == 1 && max_na > 0 && as.integer(max_na) == max_na,
     "max_na must be greater than or equal to min_na" =
@@ -409,6 +409,7 @@ create_tune_function <- function(method) {
     )
 
     params$method <- method
+    params$na_injected <- sapply(params$na_loc, length)
     exclude <- c("sample_id", "feature_id", "na_loc", "r_names", "c_names")
     return(params[, setdiff(names(params), exclude)])
   }
