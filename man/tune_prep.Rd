@@ -11,6 +11,8 @@ tune_prep(
   rep = 1,
   hp = NULL,
   prop = 0.05,
+  min_na = 50,
+  max_na = 5000,
   c_thresh = 0.9,
   r_thresh = 0.9,
   max_iter = 1000,
@@ -29,6 +31,10 @@ tune_prep(
 \item{hp}{A data frame. Optional hyperparameter grid to be used for tuning. Default is \code{NULL}.}
 
 \item{prop}{A numeric value between 0 and 1. Proportion of values to inject as missing in the subset of the matrix. Default is \code{0.05}.}
+
+\item{min_na}{An integer. Minimum number of \code{NA} injected. Default is \code{50}. Used to calculate prediction performance.}
+
+\item{max_na}{An integer. Maximum number of \code{NA} injected. Default is \code{5000}. Used to calculate prediction performance.}
 
 \item{c_thresh}{A numeric value between 0 and 1. Maximum allowed proportion of missing values per column. Default is \code{0.9}.}
 
@@ -55,5 +61,15 @@ row.names(X) <- 1:10
 colnames(X) <- 1:10
 group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
 group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
-tune_prep(X, group_sample, group_feature, rep = 3, prop = 0.2, c_thresh = 1, r_thresh = 1)
+tune_prep(
+  X,
+  group_sample,
+  group_feature,
+  rep = 3,
+  prop = 0.1,
+  c_thresh = 1,
+  r_thresh = 1,
+  min_na = 5,
+  max_na = 10
+)
 }

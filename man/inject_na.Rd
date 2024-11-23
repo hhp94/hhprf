@@ -9,6 +9,8 @@ inject_na(
   feature_id,
   sample_id,
   prop,
+  min_na,
+  max_na,
   c_thresh = 0.9,
   r_thresh = 0.9,
   max_iter = 1000,
@@ -24,6 +26,10 @@ inject_na(
 \item{sample_id}{A vector of sample IDs to subset columns of \code{X}.}
 
 \item{prop}{A numeric value between 0 and 1. Proportion of values to inject as missing in the subset of the matrix. Default is \code{0.05}.}
+
+\item{min_na}{An integer. Minimum number of \code{NA} injected. Default is \code{50}. Used to calculate prediction performance.}
+
+\item{max_na}{An integer. Maximum number of \code{NA} injected. Default is \code{5000}. Used to calculate prediction performance.}
 
 \item{c_thresh}{A numeric value between 0 and 1. Maximum allowed proportion of missing values per column. Default is \code{0.9}.}
 
@@ -48,5 +54,15 @@ colnames(X) <- 1:10
 rownames(X) <- 1:100
 feature_id <- rownames(X)[1:5]
 sample_id <- colnames(X)[1:5]
-inject_na(X, feature_id, sample_id, prop = 0.1, c_thresh = 1, r_thresh = 1, transpose = FALSE)
+inject_na(
+  X,
+  feature_id,
+  sample_id,
+  prop = 0.1,
+  c_thresh = 1,
+  r_thresh = 1,
+  min_na = 5,
+  max_na = 10,
+  transpose = FALSE
+)
 }

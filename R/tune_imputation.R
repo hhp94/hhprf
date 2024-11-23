@@ -13,6 +13,8 @@
 #' @param rep A positive integer. The number of repeats for NA injection. Default is `1`.
 #' @param hp A data frame. Optional hyperparameter grid to be used for tuning. Default is `NULL`.
 #' @param prop A numeric value between 0 and 1. Proportion of values to inject as missing in the subset of the matrix. Default is `0.05`.
+#' @param min_na An integer. Minimum number of `NA` injected. Default is `50`. Used to calculate prediction performance.
+#' @param max_na An integer. Maximum number of `NA` injected. Default is `5000`. Used to calculate prediction performance.
 #' @param c_thresh A numeric value between 0 and 1. Maximum allowed proportion of missing values per column. Default is `0.9`.
 #' @param r_thresh A numeric value between 0 and 1. Maximum allowed proportion of missing values per row. Default is `0.9`.
 #' @param max_iter A positive integer. Maximum number of iterations for injecting missing values. Default is 1000.
@@ -26,7 +28,17 @@
 #' colnames(X) <- 1:10
 #' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
 #' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
-#' tune_prep(X, group_sample, group_feature, rep = 3, prop = 0.2, c_thresh = 1, r_thresh = 1)
+#' tune_prep(
+#'   X,
+#'   group_sample,
+#'   group_feature,
+#'   rep = 3,
+#'   prop = 0.1,
+#'   c_thresh = 1,
+#'   r_thresh = 1,
+#'   min_na = 5,
+#'   max_na = 10
+#' )
 #' @export
 tune_prep <- function(
     X,
@@ -35,6 +47,8 @@ tune_prep <- function(
     rep = 1,
     hp = NULL,
     prop = 0.05,
+    min_na = 50,
+    max_na = 5000,
     c_thresh = 0.9,
     r_thresh = 0.9,
     max_iter = 1000,
@@ -105,15 +119,8 @@ tune_prep <- function(
   )
   df <- dplyr::inner_join(df, group_sample_collapsed, by = c("sample_group" = "group"))
   df <- dplyr::inner_join(df, group_feature_collapsed, by = c("feature_group" = "group"))
-  df <- dplyr::mutate(
-    df,
-    sample_id = lapply(sample_id, \(x){
-      x$sample_id
-    }),
-    feature_id = lapply(feature_id, \(x){
-      x$feature_id
-    })
-  )
+  df[["sample_id"]] <- lapply(df[["sample_id"]], \(x){ x[["sample_id"]] })
+  df[["feature_id"]] <- lapply(df[["feature_id"]], \(x){ x[["feature_id"]] })
   df$seed <- sample.int(nrow(df) * 10, size = nrow(df))
 
   # ampute
@@ -128,6 +135,8 @@ tune_prep <- function(
         prop = prop,
         c_thresh = c_thresh,
         r_thresh = r_thresh,
+        min_na = min_na,
+        max_na = max_na,
         max_iter = max_iter,
         transpose = transpose
       )
@@ -155,13 +164,25 @@ tune_prep <- function(
 #' rownames(X) <- 1:100
 #' feature_id <- rownames(X)[1:5]
 #' sample_id <- colnames(X)[1:5]
-#' inject_na(X, feature_id, sample_id, prop = 0.1, c_thresh = 1, r_thresh = 1, transpose = FALSE)
+#' inject_na(
+#'   X,
+#'   feature_id,
+#'   sample_id,
+#'   prop = 0.1,
+#'   c_thresh = 1,
+#'   r_thresh = 1,
+#'   min_na = 5,
+#'   max_na = 10,
+#'   transpose = FALSE
+#' )
 #' @export
 inject_na <- function(
     X,
     feature_id,
     sample_id,
     prop,
+    min_na,
+    max_na,
     c_thresh = 0.9,
     r_thresh = 0.9,
     max_iter = 1000,
@@ -175,11 +196,20 @@ inject_na <- function(
     if (i < 0) stop("Thresholds must be non-negative")
     if (i > 1) stop("Thresholds must be less than or equal to 1")
   }
-  stopifnot("max_iter must be positive" = (is.numeric(max_iter) && length(max_iter) == 1 && max_iter > 0 && as.integer(max_iter) == max_iter))
+
   stopifnot(
+    "max_iter must be a positive integer" =
+      is.numeric(max_iter) && length(max_iter) == 1 && max_iter > 0 && as.integer(max_iter) == max_iter,
     "prop must be a single numeric value between 0 and 1 (inclusive)" =
-      is.numeric(prop) && length(prop) == 1 && 0 < prop && prop <= 1
+      is.numeric(prop) && length(prop) == 1 && 0 < prop && prop <= 1,
+    "min_na must be a non-negative integer" =
+      is.numeric(min_na) && length(min_na) == 1 && min_na >= 0 && as.integer(min_na) == min_na,
+    "max_na must be a positive integer" =
+      is.numeric(max_na) && length(max_na) == 1 && max_na > 0 && as.integer(max_na) == max_na,
+    "max_na must be greater than or equal to min_na" =
+      max_na >= min_na
   )
+
   # subset the matrix to the specified features and samples
   M <- if (transpose) {
     t(X[feature_id, sample_id])
@@ -188,9 +218,26 @@ inject_na <- function(
   }
   na_mat <- !is.na(M)
   not_na <- which(na_mat)
+  # calculate `na_size` and make sure falls within [min_na, max_na]
+  if (min_na > length(not_na)) {
+    stop(
+      sprintf(
+        "'min_na' (%d) exceeds the number of available non-NA elements (%d).
+        Adjust 'min_na' or increase feature/sample group size.",
+        min_na, length(not_na)
+      )
+    )
+  }
   na_size <- ceiling(length(not_na) * prop)
-  if (na_size == 0) {
-    stop("Increase the proportion of missing values (prop).")
+  na_size <- max(min(na_size, max_na), min_na)
+  if (na_size == 0 || na_size > length(not_na)) {
+    stop(
+      sprintf(
+        "Invalid number of NAs to inject: calculated na_size = %d, available non-NA elements = %d.
+        Adjust 'prop', 'min_na', 'max_na', or increase feature/sample group size.",
+        na_size, length(not_na)
+      )
+    )
   }
   # max allowed missing counts per column and row
   max_col_miss <- floor(nrow(na_mat) * c_thresh)
@@ -308,14 +355,16 @@ create_tune_function <- function(method) {
            hp = NULL,
            rep = 1,
            prop = 0.05,
+           min_na,
+           max_na,
            c_thresh = 0.9,
            r_thresh = 0.9,
            max_iter = 1000,
            parallel = FALSE,
-           progress = FALSE,
+           progress = TRUE,
            ...) {
     # set up parallel processing function
-    lapply_fn <- if (parallel) furrr::future_pmap else purrr::pmap
+    lapply_fn <- if (parallel) {furrr::future_pmap} else {purrr::pmap}
 
     # validate hyperparameters data.frame
     validation_rules[[method]](hp)
@@ -334,6 +383,8 @@ create_tune_function <- function(method) {
       c_thresh = c_thresh,
       r_thresh = r_thresh,
       max_iter = max_iter,
+      min_na = min_na,
+      max_na = max_na,
       transpose = model_config[[method]]$transpose
     )
 
@@ -395,7 +446,9 @@ create_tune_function <- function(method) {
 #'   parallel = FALSE,
 #'   progress = TRUE,
 #'   c_thresh = 1,
-#'   r_thresh = 1
+#'   r_thresh = 1,
+#'   min_na = 5,
+#'   max_na = 10
 #' )
 #' @export
 tune_knn <- create_tune_function("knn")
@@ -431,7 +484,9 @@ tune_knn <- create_tune_function("knn")
 #'   parallel = FALSE,
 #'   progress = TRUE,
 #'   c_thresh = 1,
-#'   r_thresh = 1
+#'   r_thresh = 1,
+#'   min_na = 5,
+#'   max_na = 10
 #' )
 #' @export
 tune_imputePCA <- create_tune_function("imputePCA")
@@ -465,7 +520,9 @@ tune_imputePCA <- create_tune_function("imputePCA")
 #'   parallel = FALSE,
 #'   progress = TRUE,
 #'   c_thresh = 1,
-#'   r_thresh = 1
+#'   r_thresh = 1,
+#'   min_na = 5,
+#'   max_na = 10
 #' )
 #' @export
 tune_impute_methyLImp2 <- create_tune_function("methyLImp2")
