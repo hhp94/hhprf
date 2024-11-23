@@ -33,8 +33,8 @@ for each combination of hyper parameter
       return chromosome and group wise best combination of hyper parameter
 
 ```{r}
-# s <- sim_mat(100, 10)
-#
+# s <- sim_mat(10000, 100)
+# 
 # set.seed(1234)
 # inject_na(
 #   s$input,
@@ -42,35 +42,22 @@ for each combination of hyper parameter
 #   sample_id = s$group_sample$sample_id, prop = 0.05,
 #   c_thresh = 1,
 #   r_thresh = 1,
+#   min_na = 50,
+#   max_na = 5000,
 #   transpose = FALSE
 # )
-#
+# 
 # a <- tune_knn(
 #   X = s$input,
 #   hp = data.frame(k = c(1, 2), maxp_prop = c(0.5, 0.7)),
 #   group_sample = s$group_sample,
 #   group_feature = s$group_feature,
 #   rep = 2,
-#   prop = c(0.1)
+#   min_na = 50,
+#   max_na = 5000,
+#   prop = c(0.1),
+#   progress = TRUE,
+#   parallel = FALSE
 # )
-#
-# b <- tune_imputePCA(
-#   X = s$input,
-#   hp = data.frame(ncp = 1),
-#   group_sample = s$group_sample,
-#   group_feature = s$group_feature,
-#   rep = 2,
-#   prop = c(0.1)
-# )
-#
-# d <- tune_impute_methyLImp2(
-#   X = s$input,
-#   group_sample = s$group_sample,
-#   group_feature = s$group_feature,
-#   rep = 2,
-#   prop = c(0.1)
-# )
-#
-# d$tune
 ```
 

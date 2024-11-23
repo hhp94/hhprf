@@ -16,7 +16,9 @@ tune_prep(
   c_thresh = 0.9,
   r_thresh = 0.9,
   max_iter = 1000,
-  transpose = FALSE
+  transpose = FALSE,
+  parallel = FALSE,
+  progress = FALSE
 )
 }
 \arguments{
@@ -43,6 +45,10 @@ tune_prep(
 \item{max_iter}{A positive integer. Maximum number of iterations for injecting missing values. Default is 1000.}
 
 \item{transpose}{Transpose before NA injection or not. Default to FALSE}
+
+\item{parallel}{Logical. If \code{TRUE}, enables parallel processing using the \code{furrr} package. Default is \code{FALSE}.}
+
+\item{progress}{Logical. If \code{TRUE}, displays a progress bar for the tuning process. Default is \code{FALSE}.}
 }
 \value{
 A data frame

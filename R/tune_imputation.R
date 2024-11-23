@@ -19,6 +19,8 @@
 #' @param r_thresh A numeric value between 0 and 1. Maximum allowed proportion of missing values per row. Default is `0.9`.
 #' @param max_iter A positive integer. Maximum number of iterations for injecting missing values. Default is 1000.
 #' @param transpose Transpose before NA injection or not. Default to FALSE
+#' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
+#' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
 #'
 #' @return A data frame
 #'
@@ -52,19 +54,21 @@ tune_prep <- function(
     c_thresh = 0.9,
     r_thresh = 0.9,
     max_iter = 1000,
-    transpose = FALSE) {
+    transpose = FALSE,
+    parallel = FALSE,
+    progress = FALSE) {
   # input validation
-  stopifnot("X has to be a matrix" = is.matrix(X))
+  stopifnot("'X' has to be a matrix" = is.matrix(X))
   if (ncol(X) > nrow(X)) {
-    warning("X is expected to be long")
+    warning("'X' is expected to be long")
   }
   if (!(length(rep) == 1 && is.numeric(rep) && rep == as.integer(rep) && rep >= 1)) {
-    stop("`rep` has to be a positive integer")
+    stop("'rep' has to be a positive integer")
   }
   if (!is.null(hp)) {
     stopifnot(
-      "`hp` has to be a data frame" = is.data.frame(hp),
-      "`hp` needs at least 1 row" = nrow(hp) > 0
+      "'hp' has to be a data frame" = is.data.frame(hp),
+      "'hp' needs at least 1 row" = nrow(hp) > 0
     )
   }
   if (is.null(group_sample)) {
@@ -74,28 +78,37 @@ tune_prep <- function(
     group_feature <- data.frame(feature_id = rownames(X), group = "all_features")
   }
   stopifnot(
-    "`group_sample` has to be a data frame with 2 columns: `sample_id` and `group`" = is.data.frame(group_sample),
-    "`group_sample` needs at least 1 row" = nrow(group_sample) > 0,
-    "`group_sample` must contain unique `sample_id`" = !anyDuplicated(group_sample$sample_id)
+    "'group_sample' has to be a data frame with 2 columns: 'sample_id' and 'group'" = is.data.frame(group_sample),
+    "'group_sample' needs at least 1 row" = nrow(group_sample) > 0,
+    "'group_sample' must contain unique 'sample_id'" = !anyDuplicated(group_sample$sample_id)
   )
   stopifnot(
-    "`group_feature` has to be a data frame with 2 columns: `feature_id` and `group`" = is.data.frame(group_feature),
-    "`group_feature` needs at least 1 row" = nrow(group_feature) > 0,
-    "`group_feature` must contain unique `feature_id`" = !anyDuplicated(group_feature$feature_id)
+    "'group_feature' has to be a data frame with 2 columns: 'feature_id' and 'group'" = is.data.frame(group_feature),
+    "'group_feature' needs at least 1 row" = nrow(group_feature) > 0,
+    "'group_feature' must contain unique 'feature_id'" = !anyDuplicated(group_feature$feature_id)
   )
   stopifnot(
-    "`X` has to have row names (feature_id)" = !is.null(row.names(X)),
-    "`X` has to have col names (sample_id)" = !is.null(colnames(X)),
-    "`X`'s row names must match `group_feature$feature_id`" = all(row.names(X) %in% group_feature$feature_id),
-    "`X`'s column names must match `group_sample$sample_id`" = all(colnames(X) %in% group_sample$sample_id)
+    "'X' has to have row names (feature_id)" = !is.null(row.names(X)),
+    "'X' has to have col names (sample_id)" = !is.null(colnames(X)),
+    "'X''s row names must match 'group_feature$feature_id'" = all(row.names(X) %in% group_feature$feature_id),
+    "'X''s column names must match 'group_sample$sample_id'" = all(colnames(X) %in% group_sample$sample_id)
   )
   sample_group_counts <- table(group_sample$group)
   if (any(sample_group_counts == 1)) {
-    stop("Each group sample must have more than 1 sample.")
+    stop("Group sample with only 1 sample detected.")
   }
   feature_group_counts <- table(group_feature$group)
   if (any(feature_group_counts == 1)) {
-    stop("Each group feature must have more than 1 feature.")
+    stop("Group feature with only 1 feature detected.")
+  }
+  for (i in c(parallel, progress)) {
+    stopifnot(
+      "'parallel' and 'progress' must be logical values of length one" =
+        is.logical(i) && length(i) == 1
+    )
+  }
+  if (parallel == TRUE && future::nbrOfWorkers() == 1) {
+    stop("'parallel' is TRUE, but only one worker is available.")
   }
   # end validation
   df <- tidyr::expand_grid(
@@ -119,28 +132,44 @@ tune_prep <- function(
   )
   df <- dplyr::inner_join(df, group_sample_collapsed, by = c("sample_group" = "group"))
   df <- dplyr::inner_join(df, group_feature_collapsed, by = c("feature_group" = "group"))
-  df[["sample_id"]] <- lapply(df[["sample_id"]], \(x){ x[["sample_id"]] })
-  df[["feature_id"]] <- lapply(df[["feature_id"]], \(x){ x[["feature_id"]] })
+  df[["sample_id"]] <- lapply(df[["sample_id"]], \(x){
+    x[["sample_id"]]
+  })
+  df[["feature_id"]] <- lapply(df[["feature_id"]], \(x){
+    x[["feature_id"]]
+  })
   df$seed <- sample.int(nrow(df) * 10, size = nrow(df))
 
   # ampute
-  df$na_loc <- purrr::map2(
-    df$feature_id,
-    df$sample_id,
-    \(fid, sid) {
-      inject_na(
-        X = X,
-        feature_id = fid,
-        sample_id = sid,
-        prop = prop,
-        c_thresh = c_thresh,
-        r_thresh = r_thresh,
-        min_na = min_na,
-        max_na = max_na,
-        max_iter = max_iter,
-        transpose = transpose
-      )
-    }
+  ampute_args <- list(
+    X = X,
+    prop = prop,
+    c_thresh = c_thresh,
+    r_thresh = r_thresh,
+    min_na = min_na,
+    max_na = max_na,
+    max_iter = max_iter,
+    transpose = transpose
+  )
+  lapply_args <- list(.progress = progress)
+  if (parallel) {
+    lapply_args <- c(lapply_args, list(.options = furrr::furrr_options(seed = TRUE)))
+    lapply_fn <- furrr::future_map2
+  } else {
+    lapply_fn <- purrr::map2
+  }
+  df$na_loc <- do.call(
+    "lapply_fn",
+    c(
+      list(
+        df$feature_id,
+        df$sample_id,
+        .f = function(fid, sid) {
+          do.call(inject_na, c(list(feature_id = fid, sample_id = sid), ampute_args))
+        }
+      ),
+      lapply_args
+    )
   )
   df <- tidyr::unnest(df, cols = dplyr::all_of("na_loc"))
   return(df)
@@ -198,15 +227,15 @@ inject_na <- function(
   }
 
   stopifnot(
-    "max_iter must be a positive integer" =
+    "'max_iter' must be a positive integer" =
       is.numeric(max_iter) && length(max_iter) == 1 && max_iter > 0 && as.integer(max_iter) == max_iter,
-    "prop must be a single numeric value between 0 and 1 (inclusive)" =
+    "'prop' must be a single numeric value between 0 and 1 (inclusive)" =
       is.numeric(prop) && length(prop) == 1 && 0 < prop && prop <= 1,
-    "min_na must be a positive integer" =
+    "'min_na' must be a positive integer" =
       is.numeric(min_na) && length(min_na) == 1 && min_na > 0 && as.integer(min_na) == min_na,
-    "max_na must be a positive integer" =
+    "'max_na' must be a positive integer" =
       is.numeric(max_na) && length(max_na) == 1 && max_na > 0 && as.integer(max_na) == max_na,
-    "max_na must be greater than or equal to min_na" =
+    "'max_na' must be greater than or equal to 'min_na'" =
       max_na >= min_na
   )
 
@@ -280,24 +309,24 @@ inject_na <- function(
 validation_rules <- list(
   knn = function(hp) {
     stopifnot(
-      "`hp` has to be a data.frame with 2 columns `k` and `maxp_prop`" =
+      "'hp' has to be a data.frame with 2 columns 'k' and 'maxp_prop'" =
         is.data.frame(hp) && all(c("k", "maxp_prop") %in% names(hp)),
-      "`k` has to be positive integers" =
+      "'k' has to be positive integers" =
         all(as.integer(hp[["k"]]) == hp[["k"]]) && min(hp[["k"]]) > 0,
-      "`maxp_prop` has to be real numbers between 0 and 1 (inclusive)" =
+      "'maxp_prop' has to be real numbers between 0 and 1 (inclusive)" =
         is.numeric(hp[["maxp_prop"]]) && min(hp[["maxp_prop"]]) >= 0 &&
           max(hp[["maxp_prop"]]) <= 1,
-      "`hp` cannot have duplicated rows" =
+      "'hp' cannot have duplicated rows" =
         nrow(hp) == nrow(dplyr::distinct(hp))
     )
   },
   imputePCA = function(hp) {
     stopifnot(
-      "`hp` has to be a data.frame with 1 column `ncp`" =
+      "'hp' has to be a data.frame with 1 column 'ncp'" =
         is.data.frame(hp) && all(c("ncp") %in% names(hp)),
-      "`ncp` has to be positive integers" =
+      "'ncp' has to be positive integers" =
         all(as.integer(hp[["ncp"]]) == hp[["ncp"]]) && min(hp[["ncp"]]) > 0,
-      "`hp` cannot have duplicated rows" =
+      "'hp' cannot have duplicated rows" =
         nrow(hp) == nrow(dplyr::distinct(hp))
     )
   },
@@ -361,10 +390,14 @@ create_tune_function <- function(method) {
            r_thresh = 0.9,
            max_iter = 1000,
            parallel = FALSE,
-           progress = TRUE,
+           progress = FALSE,
            ...) {
     # set up parallel processing function
-    lapply_fn <- if (parallel) {furrr::future_pmap} else {purrr::pmap}
+    lapply_fn <- if (parallel) {
+      furrr::future_pmap
+    } else {
+      purrr::pmap
+    }
 
     # validate hyperparameters data.frame
     validation_rules[[method]](hp)
@@ -385,7 +418,9 @@ create_tune_function <- function(method) {
       max_iter = max_iter,
       min_na = min_na,
       max_na = max_na,
-      transpose = model_config[[method]]$transpose
+      transpose = model_config[[method]]$transpose,
+      parallel = parallel,
+      progress = progress
     )
 
     # prepare model-specific parameters
@@ -421,11 +456,9 @@ create_tune_function <- function(method) {
 #'
 #' Tunes the parameters of the [impute::impute.knn()] method for imputing missing values.
 #' This function evaluates the performance of different parameter combinations through repeated
-#' NA injection and imputation, across various feature and sample groupings.
+#' `NA` injection and imputation, across various feature and sample groupings.
 #'
 #' @inheritParams tune_prep
-#' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
-#' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
 #' @param ... Arguments passed to [impute::impute.knn()]
 #' @return A data frame containing the tuning parameters and a column called `tune`
 #' that contains the tuning results for each parameter combination.`tune` can be used
@@ -459,15 +492,12 @@ tune_knn <- create_tune_function("knn")
 #'
 #' Tunes the parameters of the [missMDA::imputePCA()] method for imputing missing values.
 #' This function evaluates the performance of different parameter combinations through repeated
-#' NA injection and imputation, across various feature and sample groupings.
+#' `NA` injection and imputation, across various feature and sample groupings.
 #'
 #' @inheritParams tune_prep
-#' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
-#' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
 #' @param ... Arguments passed to [missMDA::imputePCA()]
-#' @return A data frame containing the tuning parameters and a column called `tune`
-#' that contains the tuning results for each parameter combination.`tune` can be used
-#' for performance measurement (i.e. with [yardstick::rmse()]).
+#'
+#' @inherit tune_knn return
 #'
 #' @examples
 #' X <- matrix(rnorm(100), nrow = 10, ncol = 10)
@@ -497,15 +527,12 @@ tune_imputePCA <- create_tune_function("imputePCA")
 #'
 #' Tunes the parameters of the [methyLImp2::methyLImp2()] method for imputing missing values.
 #' This function evaluates the performance of different parameter combinations through repeated
-#' NA injection and imputation, across various feature and sample groupings.
+#' `NA` injection and imputation, across various feature and sample groupings.
 #'
 #' @inheritParams tune_prep
-#' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
-#' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
 #' @param ... Arguments passed to [methyLImp2::methyLImp2()]
-#' @return A data frame containing the tuning parameters and a column called `tune`
-#' that contains the tuning results for each parameter combination.`tune` can be used
-#' for performance measurement (i.e. with [yardstick::rmse()]).
+#'
+#' @inherit tune_knn return
 #'
 #' @examples
 #' X <- matrix(rnorm(100), nrow = 10, ncol = 10)

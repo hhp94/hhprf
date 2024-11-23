@@ -17,7 +17,7 @@ tune_knn(
   r_thresh = 0.9,
   max_iter = 1000,
   parallel = FALSE,
-  progress = TRUE,
+  progress = FALSE,
   ...
 )
 }
@@ -58,7 +58,7 @@ for performance measurement (i.e. with \code{\link[yardstick:rmse]{yardstick::rm
 \description{
 Tunes the parameters of the \code{\link[impute:impute.knn]{impute::impute.knn()}} method for imputing missing values.
 This function evaluates the performance of different parameter combinations through repeated
-NA injection and imputation, across various feature and sample groupings.
+\code{NA} injection and imputation, across various feature and sample groupings.
 }
 \examples{
 X <- matrix(rnorm(1000), nrow = 100, ncol = 10)
