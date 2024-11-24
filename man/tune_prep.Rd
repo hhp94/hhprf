@@ -18,7 +18,8 @@ tune_prep(
   max_iter = 1000,
   transpose = FALSE,
   parallel = FALSE,
-  progress = FALSE
+  progress = FALSE,
+  temp_path = NULL
 )
 }
 \arguments{
@@ -28,7 +29,7 @@ tune_prep(
 
 \item{group_feature}{A data frame with two columns: \code{feature_id} and \code{group}. Maps features to their respective groups. Default is \code{NULL}.}
 
-\item{rep}{A positive integer. The number of repeats for NA injection. Default is \code{1}.}
+\item{rep}{A vector of unique elements. The length of the vector is the times the tuning is repeated.}
 
 \item{hp}{A data frame. Optional hyperparameter grid to be used for tuning. Default is \code{NULL}.}
 
@@ -49,6 +50,13 @@ tune_prep(
 \item{parallel}{Logical. If \code{TRUE}, enables parallel processing using the \code{furrr} package. Default is \code{FALSE}.}
 
 \item{progress}{Logical. If \code{TRUE}, displays a progress bar for the tuning process. Default is \code{FALSE}.}
+
+\item{temp_path}{Storage location for matrices. Options:
+\itemize{
+\item \code{NULL}: Save in temporary directory (cleared at session end)
+\item Character string: Save in specified directory path
+\item \code{NA}: Store in memory (may significantly increase memory usage)
+}}
 }
 \value{
 A data frame
@@ -60,22 +68,4 @@ imputation methods by injecting \code{NA} multiple times, imputing the data,
 and comparing the imputed data to the original data before the \code{NA} injection. The function
 also sets up tuning stratified by feature groups (e.g., chromosomes) and sample groups
 (e.g., sample batches).
-}
-\examples{
-X <- matrix(rnorm(100), nrow = 10, ncol = 10)
-row.names(X) <- 1:10
-colnames(X) <- 1:10
-group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
-group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
-tune_prep(
-  X,
-  group_sample,
-  group_feature,
-  rep = 3,
-  prop = 0.1,
-  c_thresh = 1,
-  r_thresh = 1,
-  min_na = 5,
-  max_na = 10
-)
 }

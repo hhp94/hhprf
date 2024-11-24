@@ -10,7 +10,7 @@
 #' @param X A numeric matrix. The input data to be imputed. Rows correspond to features, and columns correspond to samples.
 #' @param group_sample A data frame with two columns: `sample_id` and `group`. Maps samples to their respective groups. Default is `NULL`.
 #' @param group_feature A data frame with two columns: `feature_id` and `group`. Maps features to their respective groups. Default is `NULL`.
-#' @param rep A positive integer. The number of repeats for NA injection. Default is `1`.
+#' @param rep A vector of unique elements. The length of the vector is the times the tuning is repeated.
 #' @param hp A data frame. Optional hyperparameter grid to be used for tuning. Default is `NULL`.
 #' @param prop A numeric value between 0 and 1. Proportion of values to inject as missing in the subset of the matrix. Default is `0.05`.
 #' @param min_na An integer. Minimum number of `NA` injected. Default is `50`. Used to calculate prediction performance.
@@ -21,26 +21,12 @@
 #' @param transpose Transpose before NA injection or not. Default to FALSE
 #' @param parallel Logical. If `TRUE`, enables parallel processing using the `furrr` package. Default is `FALSE`.
 #' @param progress Logical. If `TRUE`, displays a progress bar for the tuning process. Default is `FALSE`.
+#' @param temp_path Storage location for matrices. Options:
+#'   * `NULL`: Save in temporary directory (cleared at session end)
+#'   * Character string: Save in specified directory path
+#'   * `NA`: Store in memory (may significantly increase memory usage)
 #'
 #' @return A data frame
-#'
-#' @examples
-#' X <- matrix(rnorm(100), nrow = 10, ncol = 10)
-#' row.names(X) <- 1:10
-#' colnames(X) <- 1:10
-#' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
-#' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
-#' tune_prep(
-#'   X,
-#'   group_sample,
-#'   group_feature,
-#'   rep = 3,
-#'   prop = 0.1,
-#'   c_thresh = 1,
-#'   r_thresh = 1,
-#'   min_na = 5,
-#'   max_na = 10
-#' )
 #' @export
 tune_prep <- function(
     X,
@@ -56,14 +42,15 @@ tune_prep <- function(
     max_iter = 1000,
     transpose = FALSE,
     parallel = FALSE,
-    progress = FALSE) {
+    progress = FALSE,
+    temp_path = NULL) {
   # input validation
   stopifnot("'X' has to be a matrix" = is.matrix(X))
   if (ncol(X) > nrow(X)) {
     warning("'X' is expected to be long")
   }
-  if (!(length(rep) == 1 && is.numeric(rep) && rep == as.integer(rep) && rep >= 1)) {
-    stop("'rep' has to be a positive integer")
+  if (anyDuplicated(rep)) {
+    stop("'rep' has to contain unique values")
   }
   if (!is.null(hp)) {
     stopifnot(
@@ -111,15 +98,11 @@ tune_prep <- function(
     stop("'parallel' is TRUE, but only one worker is available.")
   }
   # end validation
+  ## create combination of the group and features
   df <- tidyr::expand_grid(
     sample_group = unique(group_sample$group),
-    feature_group = unique(group_feature$group),
-    rep = seq_len(rep)
+    feature_group = unique(group_feature$group)
   )
-  if (!is.null(hp)) {
-    df$params <- list(hp)
-    df <- tidyr::unnest(df, cols = dplyr::all_of("params"))
-  }
   group_sample_collapsed <- tidyr::nest(
     group_sample,
     sample_id = dplyr::all_of("sample_id"),
@@ -138,42 +121,127 @@ tune_prep <- function(
   df[["feature_id"]] <- lapply(df[["feature_id"]], \(x){
     x[["feature_id"]]
   })
+  # save the sub matrices. This is crucial for saving memories to avoid passing the full
+  # beta matrix to the workers in parallelization
+  df <- save_sub_matrix(df = df, X = X, temp_path = temp_path, progress = progress)
+  df[, c("sample_id", "feature_id")] <- NULL
+
+  ## add rep
+  df$rep <- list(rep)
+  df <- tidyr::unnest(df, cols = dplyr::all_of("rep"))
   df$seed <- sample.int(nrow(df) * 10, size = nrow(df))
 
-  # ampute
+  # ampute. Each unique rep gets a unique NA pattern. But same NA pattern is used on
+  # different hyper parameters.
   ampute_args <- list(
-    X = X,
-    prop = prop,
-    c_thresh = c_thresh,
-    r_thresh = r_thresh,
-    min_na = min_na,
-    max_na = max_na,
-    max_iter = max_iter,
-    transpose = transpose
+    prop = list(prop),
+    c_thresh = list(c_thresh),
+    r_thresh = list(r_thresh),
+    min_na = list(min_na),
+    max_na = list(max_na),
+    max_iter = list(max_iter),
+    transpose = list(transpose)
   )
+  if (is.na(temp_path)) {
+    ampute_args$X <- df$sub_matrix
+    ampute_args$hash <- list(NULL)
+  } else {
+    ampute_args$X <- df$path
+    ampute_args$hash <- df$hash
+  }
+
   lapply_args <- list(.progress = progress)
   if (parallel) {
     lapply_args <- c(lapply_args, list(.options = furrr::furrr_options(seed = TRUE)))
-    lapply_fn <- furrr::future_map2
+    lapply_fn <- furrr::future_pmap
   } else {
-    lapply_fn <- purrr::map2
+    lapply_fn <- purrr::pmap
   }
   df$na_loc <- do.call(
-    "lapply_fn",
+    lapply_fn,
     c(
       list(
-        df$feature_id,
-        df$sample_id,
-        .f = function(fid, sid) {
-          do.call(inject_na, c(list(feature_id = fid, sample_id = sid), ampute_args))
-        }
+        .l = ampute_args,
+        .f = inject_na
       ),
       lapply_args
     )
   )
   df <- tidyr::unnest(df, cols = dplyr::all_of("na_loc"))
+
+  ## add hp
+  if (!is.null(hp)) {
+    df$params <- list(hp)
+    df <- tidyr::unnest(df, cols = dplyr::all_of("params"))
+  }
+
   return(df)
 }
+
+#' Save Submatrices to Files or Memory
+#'
+#' Takes a data frame containing feature and sample IDs, extracts corresponding
+#' submatrices from a source matrix, and either saves them to disk or keeps them
+#' in memory.
+#'
+#' @param df data.frame
+#' @inheritParams tune_prep
+save_sub_matrix <- function(df, X, temp_path, progress) {
+  if (!is.data.frame(df) || !all(c("feature_id", "sample_id") %in% names(df))) {
+    stop("'df' must be a data frame with 'feature_id' and 'sample_id' columns")
+  }
+  if (!is.null(temp_path) && !is.na(temp_path)) {
+    if (length(temp_path) != 1 || !is.character(temp_path)) {
+      stop("'temp_path' must be a single string if not 'NULL' or 'NA'.")
+    }
+  }
+  if (is.null(temp_path)) {
+    temp_path <- tempdir()
+  }
+  if (is.na(temp_path)) {
+    df$sub_matrix <- purrr::map2(
+      df$feature_id,
+      df$sample_id,
+      function(feature_id, sample_id) {
+        return(X[feature_id, sample_id])
+      },
+      .progress = progress
+    )
+    return(df)
+  }
+  if (!fs::dir_exists(temp_path)) {
+    warning("'temp_path' doesn't exists. Creating folder")
+    fs::dir_create(temp_path)
+  }
+  df$path <- fs::fs_path(
+    paste(
+      temp_path,
+      paste(
+        df$sample_group,
+        df$feature_group,
+        paste(rlang::hash(Sys.time()), sample.int(nrow(df) * 10, size = nrow(df)), sep = "_"),
+        "qs2",
+        sep = "."
+      ),
+      sep = "/"
+    )
+  )
+  df$hash <- purrr::pmap_chr(
+    .l = list(
+      feature_id = df$feature_id,
+      sample_id = df$sample_id,
+      path = df$path
+    ),
+    .f = function(feature_id, sample_id, path) {
+      M <- X[feature_id, sample_id]
+      qs2::qs_save(M, path)
+      return(rlang::hash(M))
+    },
+    .progress = progress
+  )
+  return(df)
+}
+
 
 #' Inject Missing Values
 #'
@@ -181,34 +249,14 @@ tune_prep <- function(
 #' missingness thresholds.
 #'
 #' @inheritParams tune_prep
-#' @param feature_id A vector of feature IDs to subset rows of `X`.
-#' @param sample_id A vector of sample IDs to subset columns of `X`.
+#' @param hash hash of the saved object used to check hash.
 #' @param debug return extra object for debugging.
 #'
 #' @return A vector of indices indicating the locations of injected `NA` in the subset matrix.
-#'
-#' @examples
-#' X <- matrix(1:1000, nrow = 100, ncol = 10)
-#' colnames(X) <- 1:10
-#' rownames(X) <- 1:100
-#' feature_id <- rownames(X)[1:5]
-#' sample_id <- colnames(X)[1:5]
-#' inject_na(
-#'   X,
-#'   feature_id,
-#'   sample_id,
-#'   prop = 0.1,
-#'   c_thresh = 1,
-#'   r_thresh = 1,
-#'   min_na = 5,
-#'   max_na = 10,
-#'   transpose = FALSE
-#' )
 #' @export
 inject_na <- function(
     X,
-    feature_id,
-    sample_id,
+    hash = NULL,
     prop,
     min_na,
     max_na,
@@ -217,7 +265,9 @@ inject_na <- function(
     max_iter = 1000,
     transpose,
     debug = FALSE) {
-  stopifnot(is.matrix(X))
+  if (is.character(X)) {
+    X <- safe_read(X, hash = hash)
+  }
   stopifnot(is.logical(transpose), length(transpose) == 1)
   for (i in list(c_thresh, r_thresh)) {
     if (!is.numeric(i)) stop("Thresholds must be numeric values")
@@ -240,12 +290,10 @@ inject_na <- function(
   )
 
   # subset the matrix to the specified features and samples
-  M <- if (transpose) {
-    t(X[feature_id, sample_id])
-  } else {
-    X[feature_id, sample_id]
+  if (transpose) {
+    X <- t(X)
   }
-  na_mat <- !is.na(M)
+  na_mat <- !is.na(X)
   not_na <- which(na_mat)
   # calculate `na_size` and make sure falls within [min_na, max_na]
   if (min_na > length(not_na)) {
@@ -292,22 +340,19 @@ inject_na <- function(
     c_miss <- any(col_miss_count > max_col_miss)
     r_miss <- any(row_miss_count > max_row_miss)
   }
+  results <- dplyr::tibble(na_loc = list(na_loc))
   if (debug) {
-    return(list(na_loc = na_loc, M = M))
+    results$X <- list(X)
+    results$r_names <- list(row.names(X))
+    results$c_names <- list(colnames(X))
   }
-  return(
-    dplyr::tibble(
-      na_loc = list(na_loc),
-      r_names = list(row.names(M)),
-      c_names = list(colnames(M))
-    )
-  )
+  return(results)
 }
 
 # Tune Functions ----
 # model specific validation rules
 validation_rules <- list(
-  knn = function(hp) {
+  impute_knn = function(hp) {
     stopifnot(
       "'hp' has to be a data.frame with 2 columns 'k' and 'maxp_prop'" =
         is.data.frame(hp) && all(c("k", "maxp_prop") %in% names(hp)),
@@ -320,7 +365,7 @@ validation_rules <- list(
         nrow(hp) == nrow(dplyr::distinct(hp))
     )
   },
-  imputePCA = function(hp) {
+  impute_PCA = function(hp) {
     stopifnot(
       "'hp' has to be a data.frame with 1 column 'ncp'" =
         is.data.frame(hp) && all(c("ncp") %in% names(hp)),
@@ -330,47 +375,48 @@ validation_rules <- list(
         nrow(hp) == nrow(dplyr::distinct(hp))
     )
   },
-  methyLImp2 = function(hp) {}
+  impute_methyLImp2 = function(hp) {}
 )
 
 # helper function for common parameters
-prepare_params <- function(params, X, extra_args = list()) {
-  return(c(
-    list(
-      X = list(X),
-      sample_id = params$sample_id,
-      feature_id = params$feature_id,
-      seed = params$seed,
-      na_loc = params$na_loc
-    ),
-    extra_args
-  ))
+prepare_params <- function(params, extra_args = list()) {
+  main_args <- list(
+    seed = params$seed,
+    na_loc = params$na_loc
+  )
+  if (!is.null(params$sub_matrix)) {
+    main_args$X <- params$sub_matrix
+  } else {
+    main_args$X <- params$path
+    main_args$hash <- params$hash
+  }
+  return(c(main_args, extra_args))
 }
 
 # model specific parameters
 argv_list <- list(
-  knn = function(params, X) {
-    prepare_params(params, X, extra_args = list(k = params$k, maxp_prop = params$maxp_prop))
+  impute_knn = function(params) {
+    prepare_params(params, extra_args = list(k = params$k, maxp_prop = params$maxp_prop))
   },
-  imputePCA = function(params, X) {
-    prepare_params(params, X, extra_args = list(ncp = params$ncp))
+  impute_PCA = function(params) {
+    prepare_params(params, extra_args = list(ncp = params$ncp))
   },
-  methyLImp2 = function(params, X) {
-    prepare_params(params, X)
+  impute_methyLImp2 = function(params) {
+    prepare_params(params)
   }
 )
 
 # model configuration
 model_config <- list(
-  knn = list(
+  impute_knn = list(
     fun_name = "impute_knn",
     transpose = FALSE
   ),
-  imputePCA = list(
+  impute_PCA = list(
     fun_name = "impute_PCA",
     transpose = TRUE
   ),
-  methyLImp2 = list(
+  impute_methyLImp2 = list(
     fun_name = "impute_methyLImp2",
     transpose = TRUE
   )
@@ -391,12 +437,18 @@ create_tune_function <- function(method) {
            max_iter = 1000,
            parallel = FALSE,
            progress = FALSE,
+           temp_path = NULL,
            ...) {
     # set up parallel processing function
     lapply_fn <- if (parallel) {
       furrr::future_pmap
     } else {
       purrr::pmap
+    }
+
+    # use withr
+    if(is.null(temp_path)) {
+      temp_path <- withr::local_tempdir()
     }
 
     # validate hyperparameters data.frame
@@ -420,11 +472,23 @@ create_tune_function <- function(method) {
       max_na = max_na,
       transpose = model_config[[method]]$transpose,
       parallel = parallel,
-      progress = progress
+      progress = progress,
+      temp_path = temp_path
     )
 
+    if ("path" %in% names(params)) {
+      initial_paths <- params$path
+      on.exit(
+        {
+          existing_files <- initial_paths[file.exists(initial_paths)]
+          unlink(existing_files)
+        },
+        add = TRUE
+      )
+    }
+
     # prepare model-specific parameters
-    impute_args <- argv_list[[method]](params, X)
+    impute_args <- argv_list[[method]](params)
     lapply_args <- list(.progress = progress)
     if (parallel) {
       lapply_args <- c(lapply_args, list(.options = furrr::furrr_options(seed = TRUE)))
@@ -445,7 +509,7 @@ create_tune_function <- function(method) {
 
     params$method <- method
     params$na_injected <- sapply(params$na_loc, length)
-    exclude <- c("sample_id", "feature_id", "na_loc", "r_names", "c_names")
+    exclude <- c("sample_id", "feature_id", "na_loc", "r_names", "c_names", "path", "hash")
     return(params[, setdiff(names(params), exclude)])
   }
 }
@@ -464,28 +528,8 @@ create_tune_function <- function(method) {
 #' that contains the tuning results for each parameter combination.`tune` can be used
 #' for performance measurement (i.e. with [yardstick::rmse()]).
 #'
-#' @examples
-#' X <- matrix(rnorm(1000), nrow = 100, ncol = 10)
-#' row.names(X) <- 1:100
-#' colnames(X) <- 1:10
-#' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, length.out = 10))
-#' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, length.out = 100))
-#' hp <- data.frame(k = c(3, 5), maxp_prop = c(0.1, 0.2))
-#' tune_knn(
-#'   X,
-#'   group_sample,
-#'   group_feature,
-#'   hp,
-#'   rep = 2,
-#'   parallel = FALSE,
-#'   progress = TRUE,
-#'   c_thresh = 1,
-#'   r_thresh = 1,
-#'   min_na = 5,
-#'   max_na = 10
-#' )
 #' @export
-tune_knn <- create_tune_function("knn")
+tune_knn <- create_tune_function("impute_knn")
 
 # tune_imputePCA ----
 #' Tune [missMDA::imputePCA()]
@@ -499,28 +543,8 @@ tune_knn <- create_tune_function("knn")
 #'
 #' @inherit tune_knn return
 #'
-#' @examples
-#' X <- matrix(rnorm(100), nrow = 10, ncol = 10)
-#' row.names(X) <- 1:10
-#' colnames(X) <- 1:10
-#' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
-#' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
-#' hp <- data.frame(ncp = 1)
-#' tune_imputePCA(
-#'   X,
-#'   group_sample,
-#'   group_feature,
-#'   hp,
-#'   rep = 2,
-#'   parallel = FALSE,
-#'   progress = TRUE,
-#'   c_thresh = 1,
-#'   r_thresh = 1,
-#'   min_na = 5,
-#'   max_na = 10
-#' )
 #' @export
-tune_imputePCA <- create_tune_function("imputePCA")
+tune_imputePCA <- create_tune_function("impute_PCA")
 
 # tune_impute_methyLImp2 ----
 #' Tune [methyLImp2::methyLImp2()]
@@ -534,26 +558,8 @@ tune_imputePCA <- create_tune_function("imputePCA")
 #'
 #' @inherit tune_knn return
 #'
-#' @examples
-#' X <- matrix(rnorm(100), nrow = 10, ncol = 10)
-#' row.names(X) <- 1:10
-#' colnames(X) <- 1:10
-#' group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
-#' group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
-#' tune_impute_methyLImp2(
-#'   X,
-#'   group_sample,
-#'   group_feature,
-#'   rep = 2,
-#'   parallel = FALSE,
-#'   progress = TRUE,
-#'   c_thresh = 1,
-#'   r_thresh = 1,
-#'   min_na = 5,
-#'   max_na = 10
-#' )
 #' @export
-tune_impute_methyLImp2 <- create_tune_function("methyLImp2")
+tune_impute_methyLImp2 <- create_tune_function("impute_methyLImp2")
 
 #' Wrapper for [impute::impute.knn()]
 #'
@@ -565,23 +571,24 @@ tune_impute_methyLImp2 <- create_tune_function("methyLImp2")
 #' @param ... arguments passed to [impute::impute.knn()]
 impute_knn <- function(
     X,
-    feature_id,
-    sample_id,
+    hash = NULL,
     k,
     maxp_prop,
     seed,
     na_loc,
     ...) {
   set.seed(seed)
+  if (is.character(X)) {
+    X <- safe_read(X, hash = hash)
+  }
   stopifnot(is.matrix(X))
-  M <- X[feature_id, sample_id]
-  truth <- M[na_loc]
-  M[na_loc] <- NA
-  maxp <- ceiling(nrow(M) * maxp_prop)
+  truth <- X[na_loc]
+  X[na_loc] <- NA
+  maxp <- ceiling(nrow(X) * maxp_prop)
   # tryCatch object. Failure to fit will result in NA
   obj <- tryCatch(
     impute::impute.knn(
-      data = M,
+      data = X,
       k = k,
       maxp = maxp,
       rng.seed = seed,
@@ -604,20 +611,22 @@ impute_knn <- function(
 #' @param ... arguments passed to [missMDA::methyl_imputePCA()]
 impute_PCA <- function(
     X,
-    feature_id,
-    sample_id,
+    hash = NULL,
     ncp,
     seed,
     na_loc,
     ...) {
   set.seed(seed)
+  if (is.character(X)) {
+    X <- safe_read(X, hash = hash)
+  }
   stopifnot(is.matrix(X))
   # imputePCA have samples in the rows so you have to T
-  M <- t(X[feature_id, sample_id])
-  truth <- M[na_loc]
-  M[na_loc] <- NA
+  X <- t(X)
+  truth <- X[na_loc]
+  X[na_loc] <- NA
   obj <- tryCatch(
-    missMDA::methyl_imputePCA(M, ncp = ncp, ...),
+    missMDA::methyl_imputePCA(X, ncp = ncp, ...),
     error = error_fn
   )
   if (is.null(obj)) {
@@ -633,19 +642,21 @@ impute_PCA <- function(
 #' @inheritParams impute_knn
 impute_methyLImp2 <- function(
     X,
-    feature_id,
-    sample_id,
+    hash = NULL,
     seed,
     na_loc) {
   set.seed(seed)
+  if (is.character(X)) {
+    X <- safe_read(X, hash = hash)
+  }
   stopifnot(is.matrix(X))
   # `methyLImp2::mod_methyLImp2_internal` have samples in the rows so you have to t()
-  M <- t(X[feature_id, sample_id])
-  truth <- M[na_loc]
-  M[na_loc] <- NA
+  X <- t(X)
+  truth <- X[na_loc]
+  X[na_loc] <- NA
   obj <- tryCatch(
     methyLImp2::mod_methyLImp2_internal(
-      dat = M,
+      dat = X,
       min = 0,
       max = 1,
       skip_imputation_ids = NULL,
@@ -666,4 +677,11 @@ utils::globalVariables(c("sample_id", "feature_id"))
 error_fn <- function(e) {
   message("Error: ", e$message)
   return(NULL)
+}
+safe_read <- function(obj, hash = NULL) {
+  obj <- qs2::qs_read(obj, validate_checksum = TRUE)
+  if (!is.null(hash)) {
+    stopifnot("'hash' mismatch" = rlang::hash(obj) == hash)
+  }
+  return(obj)
 }

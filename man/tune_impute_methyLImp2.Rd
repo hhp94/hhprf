@@ -18,6 +18,7 @@ tune_impute_methyLImp2(
   max_iter = 1000,
   parallel = FALSE,
   progress = FALSE,
+  temp_path = NULL,
   ...
 )
 }
@@ -30,7 +31,7 @@ tune_impute_methyLImp2(
 
 \item{hp}{A data frame. Optional hyperparameter grid to be used for tuning. Default is \code{NULL}.}
 
-\item{rep}{A positive integer. The number of repeats for NA injection. Default is \code{1}.}
+\item{rep}{A vector of unique elements. The length of the vector is the times the tuning is repeated.}
 
 \item{prop}{A numeric value between 0 and 1. Proportion of values to inject as missing in the subset of the matrix. Default is \code{0.05}.}
 
@@ -48,6 +49,13 @@ tune_impute_methyLImp2(
 
 \item{progress}{Logical. If \code{TRUE}, displays a progress bar for the tuning process. Default is \code{FALSE}.}
 
+\item{temp_path}{Storage location for matrices. Options:
+\itemize{
+\item \code{NULL}: Save in temporary directory (cleared at session end)
+\item Character string: Save in specified directory path
+\item \code{NA}: Store in memory (may significantly increase memory usage)
+}}
+
 \item{...}{Arguments passed to \code{\link[methyLImp2:methyLImp2]{methyLImp2::methyLImp2()}}}
 }
 \value{
@@ -59,23 +67,4 @@ for performance measurement (i.e. with \code{\link[yardstick:rmse]{yardstick::rm
 Tunes the parameters of the \code{\link[methyLImp2:methyLImp2]{methyLImp2::methyLImp2()}} method for imputing missing values.
 This function evaluates the performance of different parameter combinations through repeated
 \code{NA} injection and imputation, across various feature and sample groupings.
-}
-\examples{
-X <- matrix(rnorm(100), nrow = 10, ncol = 10)
-row.names(X) <- 1:10
-colnames(X) <- 1:10
-group_sample <- data.frame(sample_id = colnames(X), group = rep(1:2, each = 5))
-group_feature <- data.frame(feature_id = rownames(X), group = rep(1:2, each = 5))
-tune_impute_methyLImp2(
-  X,
-  group_sample,
-  group_feature,
-  rep = 2,
-  parallel = FALSE,
-  progress = TRUE,
-  c_thresh = 1,
-  r_thresh = 1,
-  min_na = 5,
-  max_na = 10
-)
 }

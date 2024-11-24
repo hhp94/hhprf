@@ -25,7 +25,9 @@ Imports:
     missMDA,
     purrr,
     qs2,
+    rlang,
     tidyr,
     tools,
-    utils
+    utils,
+    withr
 VignetteBuilder: knitr

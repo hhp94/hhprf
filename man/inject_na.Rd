@@ -6,8 +6,7 @@
 \usage{
 inject_na(
   X,
-  feature_id,
-  sample_id,
+  hash = NULL,
   prop,
   min_na,
   max_na,
@@ -21,9 +20,7 @@ inject_na(
 \arguments{
 \item{X}{A numeric matrix. The input data to be imputed. Rows correspond to features, and columns correspond to samples.}
 
-\item{feature_id}{A vector of feature IDs to subset rows of \code{X}.}
-
-\item{sample_id}{A vector of sample IDs to subset columns of \code{X}.}
+\item{hash}{hash of the saved object used to check hash.}
 
 \item{prop}{A numeric value between 0 and 1. Proportion of values to inject as missing in the subset of the matrix. Default is \code{0.05}.}
 
@@ -47,22 +44,4 @@ A vector of indices indicating the locations of injected \code{NA} in the subset
 \description{
 Injects missing values \code{NA} into a subset of a matrix while adhering to column-wise and row-wise
 missingness thresholds.
-}
-\examples{
-X <- matrix(1:1000, nrow = 100, ncol = 10)
-colnames(X) <- 1:10
-rownames(X) <- 1:100
-feature_id <- rownames(X)[1:5]
-sample_id <- colnames(X)[1:5]
-inject_na(
-  X,
-  feature_id,
-  sample_id,
-  prop = 0.1,
-  c_thresh = 1,
-  r_thresh = 1,
-  min_na = 5,
-  max_na = 10,
-  transpose = FALSE
-)
 }
