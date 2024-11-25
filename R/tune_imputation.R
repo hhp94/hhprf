@@ -384,7 +384,7 @@ prepare_params <- function(params, extra_args = list()) {
     seed = params$seed,
     na_loc = params$na_loc
   )
-  if (!is.null(params$sub_matrix)) {
+  if ("sub_matrix" %in% names(params)) {
     main_args$X <- params$sub_matrix
   } else {
     main_args$X <- params$path
@@ -665,7 +665,7 @@ impute_methyLImp2 <- function(
     ),
     error = error_fn
   )
-  if (is.null(obj)) {
+  if (is.null(obj) || is.character(obj)) {
     return(dplyr::tibble(truth = NA, estimate = NA))
   }
   estimate <- obj[na_loc]
