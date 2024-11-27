@@ -4,7 +4,7 @@
 \alias{impute_PCA}
 \title{Wrapper for \code{\link[missMDA:methyl_imputePCA]{missMDA::methyl_imputePCA()}}}
 \usage{
-impute_PCA(X, hash = NULL, ncp, seed, na_loc, ...)
+impute_PCA(X, hash = NULL, ncp, seed, na_loc, ampute, ...)
 }
 \arguments{
 \item{X}{A numeric matrix. The input data to be imputed. Rows correspond to features, and columns correspond to samples.}

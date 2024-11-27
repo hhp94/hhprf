@@ -19,7 +19,8 @@ tune_prep(
   transpose = FALSE,
   parallel = FALSE,
   progress = FALSE,
-  temp_path = NULL
+  temp_path = NULL,
+  ampute = TRUE
 )
 }
 \arguments{
@@ -57,6 +58,8 @@ tune_prep(
 \item Character string: Save in specified directory path
 \item \code{NA}: Store in memory (may significantly increase memory usage)
 }}
+
+\item{ampute}{Logical. inject \code{NA} or not (for tuning). Default to \code{TRUE}.}
 }
 \value{
 A data frame

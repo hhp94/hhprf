@@ -6,8 +6,8 @@
 \usage{
 tune_imputePCA(
   X,
-  group_sample,
-  group_feature,
+  group_sample = NULL,
+  group_feature = NULL,
   hp = NULL,
   rep = 1,
   prop = 0.05,

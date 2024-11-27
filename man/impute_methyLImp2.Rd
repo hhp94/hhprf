@@ -4,7 +4,7 @@
 \alias{impute_methyLImp2}
 \title{Wrapper for \code{\link[methyLImp2:methyLImp2]{methyLImp2::methyLImp2()}}}
 \usage{
-impute_methyLImp2(X, hash = NULL, seed, na_loc)
+impute_methyLImp2(X, hash = NULL, seed, na_loc, ampute)
 }
 \arguments{
 \item{X}{A numeric matrix. The input data to be imputed. Rows correspond to features, and columns correspond to samples.}

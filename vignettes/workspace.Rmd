@@ -33,37 +33,24 @@ for each combination of hyper parameter
       return chromosome and group wise best combination of hyper parameter
 
 ```{r}
-# s <- sim_mat(1000, 20)
+# s <- sim_mat(10000, 30, perc_col_NA = 0.5)
+# tune_prep(X = s$input, ampute = FALSE, temp_path = NA)
+# a <- tune_knn(
+#   X = s$input,
+#   group_sample = s$group_sample,
+#   group_feature = s$group_feature,
+#   hp = data.frame(k = 1, maxp_prop = 0.1),
+#   min_na = 1,
+#   max_na = 10
+# )
 # 
-# set.seed(1234)
-# # inject_na(
-# #   s$input,
-# #   feature_id = s$group_feature$feature_id,
-# #   sample_id = s$group_sample$sample_id, prop = 0.05,
-# #   c_thresh = 1,
-# #   r_thresh = 1,
-# #   min_na = 50,
-# #   max_na = 5000,
-# #   transpose = FALSE
-# # )
+# b <- fit_imputePCA(
+#   X = s$input,
+#   # group_sample = s$group_sample,
+#   # group_feature = s$group_feature,
+#   hp = data.frame(ncp = 1)
+# )
 # 
-a <- tune_knn(
-  X = s$input,
-  hp = data.frame(k = c(1, 2), maxp_prop = c(0.5, 0.7)),
-  group_sample = s$group_sample,
-  group_feature = s$group_feature,
-  rep = 2,
-  min_na = 50,
-  max_na = 5000,
-  prop = c(0.1),
-  progress = TRUE,
-  parallel = FALSE,
-  temp_path = NULL
-)
-# 
-# a
-# p <- profvis()
-# 
-# a$path |> file.exists()
+# b |> dim()
 ```
 

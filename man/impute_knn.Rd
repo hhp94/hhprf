@@ -4,7 +4,7 @@
 \alias{impute_knn}
 \title{Wrapper for \code{\link[impute:impute.knn]{impute::impute.knn()}}}
 \usage{
-impute_knn(X, hash = NULL, k, maxp_prop, seed, na_loc, ...)
+impute_knn(X, hash = NULL, k, maxp_prop, seed, na_loc, ampute, ...)
 }
 \arguments{
 \item{X}{A numeric matrix. The input data to be imputed. Rows correspond to features, and columns correspond to samples.}
