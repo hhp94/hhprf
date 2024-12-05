@@ -43,14 +43,14 @@ for each combination of hyper parameter
 #   min_na = 1,
 #   max_na = 10
 # )
-# 
+#
 # b <- fit_imputePCA(
 #   X = s$input,
 #   # group_sample = s$group_sample,
 #   # group_feature = s$group_feature,
 #   hp = data.frame(ncp = 1)
 # )
-# 
+#
 # b |> dim()
 ```
 
