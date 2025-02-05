@@ -31,3 +31,6 @@ Imports:
     utils,
     withr
 VignetteBuilder: knitr
+Depends: 
+    R (>= 3.5)
+LazyData: true
