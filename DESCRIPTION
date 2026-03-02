@@ -6,31 +6,23 @@ Authors@R:
            comment = c(ORCID = "0000-0002-8271-9355"))
 Description: Personal regularly used functions.
 License: MIT + file LICENSE
-Encoding: UTF-8
-Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
+Depends: 
+    R (>= 3.5)
+Imports: 
+    fs,
+    qs2,
+    readr,
+    tools,
+    utils
 Suggests: 
     knitr,
     rmarkdown,
-    yardstick,
-    testthat (>= 3.0.0)
+    testthat (>= 3.0.0),
+    yardstick
+VignetteBuilder: 
+    knitr
 Config/testthat/edition: 3
-Imports: 
-    dplyr,
-    fs,
-    furrr,
-    future,
-    impute,
-    methyLImp2,
-    missMDA,
-    purrr,
-    qs2,
-    rlang,
-    tidyr,
-    tools,
-    utils,
-    withr
-VignetteBuilder: knitr
-Depends: 
-    R (>= 3.5)
+Encoding: UTF-8
 LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
